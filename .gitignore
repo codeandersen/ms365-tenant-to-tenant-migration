@@ -1,0 +1,19 @@
+# Customer working folders - inventories and mapping CSVs contain personal data.
+# Keep all customer material local; see customers/README.md.
+customers/*
+!customers/README.md
+
+# Script output
+output/
+Inventory-*/
+Inventory_*/
+TestResults*
+
+# Data exports and secrets-bearing artifacts
+*.csv
+!01-Design/templates/*.csv
+!tests/fixtures/**/*.csv
+*.log
+*.ppkg
+*.pfx
+*.xlsx

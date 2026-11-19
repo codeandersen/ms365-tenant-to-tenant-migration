@@ -1,0 +1,8 @@
+# GUIDs that are allowed in the repo - well-known Microsoft first-party IDs only.
+# One GUID per line; anything after the GUID on a line is a comment.
+f8cdef31-a31e-4b4a-93e4-5f571e91255a # Microsoft's own first-party tenant
+00000000-0000-0000-0000-000000000000 # The all-zero GUID
+00000003-0000-0000-c000-000000000000 # Microsoft Graph service principal app ID
+00000002-0000-0ff1-ce00-000000000000 # Exchange Online (Office 365 Exchange Online) app ID
+00000003-0000-0ff1-ce00-000000000000 # SharePoint Online (Office 365 SharePoint Online) app ID
+aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee # documentation placeholder GUID used in examples

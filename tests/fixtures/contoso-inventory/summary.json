@@ -1,0 +1,18 @@
+{
+  "tenantName": "Contoso",
+  "tenantId": "00000000-0000-0000-0000-000000000000",
+  "collectedBy": "admin@contoso.com",
+  "collectedByUserType": "Member",
+  "role": "Source",
+  "toolVersion": "1.0",
+  "metrics": {
+    "memberCount": 1,
+    "guestCount": 1,
+    "enabledUserCount": 2,
+    "licensedCount": 1,
+    "inactive90dCount": 0,
+    "syncedUserCount": 0
+  },
+  "failedSections": {},
+  "skippedSections": {}
+}
