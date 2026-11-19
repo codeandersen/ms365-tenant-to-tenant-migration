@@ -56,3 +56,13 @@ The list is in the order you do things — day 1 first, then the first week.
 
 Contact `<help desk>`. Tell them your old PC is untouched — most things can be
 re-checked against it while it still exists.
+
+### Sharing with guests and external people
+
+- Guests who were mapped during the migration keep their access — you do **not** need
+  to re-share files and folders with them. If a mapped guest can't get in, contact
+  <help desk> before re-sharing (their new account may still be redeeming).
+- External people who were **not** part of the migration mapping will find that your
+  shared links stop working — re-invite them from the new tenant yourself.
+- "Anyone" (anonymous) links may behave differently after the move — recreate any that
+  fail, or send a named-guest link instead.

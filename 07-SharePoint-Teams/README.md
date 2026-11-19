@@ -58,8 +58,11 @@ steps 1-7). Facts verified against the docs:
 
 1. `Get-SiteMigrationPlan.ps1` (offline) → `SiteMigrationPlan.csv`; fill in `TargetUrl`/`TargetGroupAlias`/`Track`.
 2. `New-TargetSiteGroups.ps1` (target) - group-connected rows only.
-3. Build + upload the identity-mapping CSV on the **target** (`Add-SPOTenantIdentityMap`), verify
-   `Get-SPOCrossTenantCompatibilityStatus` on the **source**.
+3. `03-Identities/New-SpoIdentityMap.ps1 -Upload -Verify` on the **target** (builds the full
+   six-column map from the user list + guest-map + group-map; `Add-SPOTenantIdentityMap`
+   **overwrites** - always re-upload the complete map) and `-CheckCompatibility` on the **source**
+   (`Get-SPOCrossTenantCompatibilityStatus`; Incompatible stops). Format and rules:
+   `01-Design/templates/SPO-Identity-Map.md`.
 4. `Start-SiteContentMoves.ps1` (source; `-ValidationOnly` first).
 5. `Get-SiteContentMoveStatus.ps1` (source) until Success.
 6. Post-migration (step 7): check site permissions on the target, republish workflows/apps,

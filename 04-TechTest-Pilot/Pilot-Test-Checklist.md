@@ -26,3 +26,9 @@ pilot before go-live. Fill the Result column per run.
 | 18 | Users feel no impact during sync; impact starts at CompleteAfterDateTime | [Documented] | Pilot user keeps working during pre-cutover sync | |
 | 19 | Scope-group membership changes take up to ~1 hour to be processed | [Documented] | Add a user to the scope group and validate immediately vs. later | |
 | 20 | CTIM must run in a session-free window (loopback redirect-URI error otherwise) | [Documented] — CTIM troubleshooting | Run a CTIM step in a window with an active EXO session; confirm refusal/error | |
+| 21 | A mapped guest keeps access to a shared OneDrive folder after migration (SPO identity map) | [Hypothesis - test] | Share a folder with a source guest pre-move; open as the guest post-move | |
+| 22 | Group-granted access to a OneDrive/SharePoint folder survives via the group map | [Hypothesis - test] | Give a source group folder access; verify a member post-move | |
+| 23 | Folder/item-level unique permissions survive for internal users **and** guests | [Hypothesis - test] | Unique ACLs on one folder + one file, internal + guest; verify post-move | |
+| 24 | "Anyone" links created pre-migration still work (or fail as documented) | [Hypothesis - test] — docs unclear | Open an Anyone link to a migrated file post-move | |
+| 25 | SPO map M365-group row: column 1 is `Group` not `User` (Learn image/table discrepancy) | [Hypothesis - test] | Upload a map with an O365Group row; confirm the row is accepted/effective | |
+| 26 | Guest invited without invitation mail redeems on first access to a shared resource | [Hypothesis - test] | Invite a pilot guest without `-SendInvitationMessage`; share a file; observe redemption | |

@@ -78,3 +78,28 @@ Learn pages:
 - **Target user licences:** Exchange Online + Teams on both sides during the migration;
   OneDrive plan for every user whose OneDrive migrates. License only after CTIM write (03). [Learn](.../migration-orchestrator-1-overview)
 - **Shared mailboxes** need a licence when: >50 GB → **Exchange Online Plan 2**; archive or Litigation Hold → **Plan 2 or Plan 1 + Exchange Online Archiving**. [Learn](https://learn.microsoft.com/en-us/microsoft-365/admin/email/about-shared-mailboxes)
+
+## Guests, groups and the SPO identity map
+
+Before any OneDrive/SharePoint move, phase 03 builds three artefacts that the CTIM
+mapping does not cover:
+
+1. `Export-SourceGuests` → `New-TargetGuests` — guests become target members (when their
+   mail domain is a verified target domain and a member exists), reused target guests,
+   or new invitations (no invitation mail by default — redemption happens on first
+   access, pilot item 26). Output: `guest-map.csv`.
+2. `Export-SourceGroups` → `New-TargetGroups` — security groups are created, dynamic
+   groups are created **paused** for review, site-migrating M365 groups are looked up
+   (created by `07 New-TargetSiteGroups` with ProvisionSiteOnDemand), mail-enabled
+   groups stay owned by `08 Copy-MailConfig`, role-assignable groups are refused.
+   Members/owners land **before** the move. Output: `group-map.csv`.
+3. `New-SpoIdentityMap` — merges users + guests + groups into the six-column,
+   no-header, no-BOM map `Add-SPOTenantIdentityMap` expects. It **overwrites** the
+   whole map, so always re-upload the complete file after any change; `-Verify`
+   samples it, `-CheckCompatibility` gates it (Incompatible aborts).
+   [Learn](https://learn.microsoft.com/en-us/microsoft-365/migration/cross-tenant-onedrive-migration-step4)
+
+Mailbox permissions (Full Access / Send As / Send on Behalf) have a single owner:
+`06-SharedMailboxes-Holds` (`Export-` / `Set-TargetMailboxPermissions`).
+`08 Copy-MailConfig` keeps only folder/calendar permissions, forwarding, lists,
+contacts and dynamic groups (created hidden).

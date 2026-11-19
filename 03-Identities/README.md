@@ -21,6 +21,31 @@ provisions a mailbox/site on the target and the migration fails for that user.
 | 10 | License | Target | `Set-TargetLicenses.ps1` (refuses unverified users) |
 | 11 | Cleanup when done | both | `-Step RemoveServicePrincipal` |
 
+## Guests, groups and the SPO identity map (before any ODSP move)
+
+| # | Step | Tenant | Script |
+|---|------|--------|--------|
+| 12 | Export source guests | Source | `Export-SourceGuests.ps1` → `source-guests.csv` |
+| 13 | Map/invite target guests | Target | `New-TargetGuests.ps1 -WhatIf` → `guest-map.csv` |
+| 14 | Export source groups + members | Source | `Export-SourceGroups.ps1` → `source-groups.csv` + `source-group-members.csv` |
+| 15 | Create site-migrating M365 groups | Target | `07 New-TargetSiteGroups.ps1` (ProvisionSiteOnDemand) |
+| 16 | Build target groups + members/owners | Target | `New-TargetGroups.ps1 -WhatIf` → `group-map.csv` — **members must exist before moves** |
+| 17 | Build + upload + verify SPO identity map | Target | `New-SpoIdentityMap.ps1 -Upload -Verify` — **full map, overwrites**; re-upload after every change |
+| 18 | Compatibility check | Source | `New-SpoIdentityMap.ps1 -CheckCompatibility` — Incompatible stops |
+
+**CTIM vs SPO identity map:** CTIM (steps 4–9) maps **only the migrating users** for
+mailbox/OneDrive moves. The SPO identity map (step 17) is what preserves access for
+**other users, guests and groups** to OneDrive/SharePoint content. Learn calls it
+optional — this playbook treats it as **required**. Format:
+`01-Design/templates/SPO-Identity-Map.md`.
+
+Guest notes: a guest whose mail domain is a verified target domain and exists as a target
+member is mapped to that member (no invite). Otherwise guests are invited without an
+e-mail by default (they redeem on first access to a shared resource — pilot item); use
+`-SendInvitationMessage` to mail them. Dynamic groups are created **paused** for review;
+mail-enabled groups are owned by `08 Copy-MailConfig`; role-assignable groups are refused
+(manual handling).
+
 > ⚠️ **No licence and no OneDrive before the CTIM write is verified.** If a user was
 > licensed early and now has a mailbox on the target, that user cannot migrate — remove the
 > licence/mailbox and recreate the MailUser.
@@ -68,5 +93,10 @@ scope.
 - `Invoke-CtimMapping.ps1` — one CTIM step per run.
 - `Test-IdentityMapping.ps1` — export source identity / verify target MailUsers.
 - `Set-TargetLicenses.ps1` — license verified users only.
+- `Export-SourceGuests.ps1` — all source guests → `source-guests.csv` (read-only).
+- `New-TargetGuests.ps1` — map to existing member/guest or invite (`-WhatIf`, no invite mail by default) → `guest-map.csv`.
+- `Export-SourceGroups.ps1` — all groups + members/owners → `source-groups.csv` + `source-group-members.csv` (read-only).
+- `New-TargetGroups.ps1` — create security/dynamic/M365 groups and set members/owners (`-WhatIf`) → `group-map.csv`.
+- `New-SpoIdentityMap.ps1` — build the full six-column SPO identity map; `-Upload -Verify -CheckCompatibility` (`-WhatIf` on upload).
 
 > Untested against live tenants — validate in technical test/pilot.

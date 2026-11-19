@@ -25,11 +25,11 @@ Add `-SharedMailboxMappingPath <06 mapping csv>` so shared/resource mailboxes ma
 
 | File | Export | Import |
 |---|---|---|
-| Permissions.csv | FullAccess, SendAs, SendOnBehalf | rebuilt via mapping; `unresolved:`/`external:` skipped |
+| ~~Permissions.csv~~ | ~~FullAccess, SendAs, SendOnBehalf~~ | **moved**: owned by `06-SharedMailboxes-Holds/Export-MailboxPermissions.ps1` + `Set-TargetMailboxPermissions.ps1` (covers user + shared/resource mailboxes via the 01 list + shared mapping) |
 | FolderPermissions.csv | Calendar (+Inbox/Contacts with `-IncludeFolders`), incl. delegates | `Add-/Set-MailboxFolderPermission` on the target's own folder names (localised!) |
 | Forwarding.csv | internal + external forwarding | internal rebuilt; external only with `-IncludeExternalForwarding` |
 | DistributionGroups(+Members).csv | lists + members | recreated tagged `CustomAttribute15='T2T:<source>'` for idempotency and cutover matching |
-| DynamicGroups.csv | filters | **manual rebuild** (recipient filters can't be copied) |
+| DynamicGroups.csv | filters | recreated **hidden** from address lists (`-Include DynamicGroups`); review the filter, then unhide |
 | MailContacts.csv | contacts | recreated |
 | TransportRules.csv/.xml | summary + full rule export | **never imported** - rebuild from the `New-TransportRule` commands in the XML, disabled until tested |
 | CheckAfterCutover.csv | inbox rules + automatic replies | report only - verify after cutover |
@@ -42,4 +42,4 @@ Add `-SharedMailboxMappingPath <06 mapping csv>` so shared/resource mailboxes ma
   lists/contacts.
 - Transport rules that reference source domains or source-only recipients belong to the post-09
   rebuild, enabled only after testing.
-- Dynamic groups: rebuild by hand after cutover (their filters may reference source-only values).
+- Dynamic groups are imported **hidden** (their filters may reference source-only values) - review and unhide after cutover.

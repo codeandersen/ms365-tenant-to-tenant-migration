@@ -169,3 +169,14 @@ Teams-connected site carries **SharePoint content only** — not the Teams struc
 Open items live in [Questions-For-Microsoft.md](Questions-For-Microsoft.md) — including
 CTIM for shared mailboxes, the shared-mailbox licence question, and OneDrive/SPO trust
 removal syntax.
+
+### Guests, groups and the SPO identity map (OneDrive/SharePoint)
+
+| What | Playbook answer | Source |
+|---|---|---|
+| External guests' access to OneDrive/SharePoint content | Preserved via the SPO identity map (`03 New-SpoIdentityMap`) — guest mapped to a target guest or target member; guests are invited/reused by `New-TargetGuests` first | [Learn](https://learn.microsoft.com/en-us/microsoft-365/migration/cross-tenant-onedrive-migration-step4) |
+| Group-granted permissions (security, M365, mail-enabled) | Groups are recreated in the target with members/owners **before** the move (`New-TargetGroups`); the map row makes the old group's permissions follow | [Learn](.../cross-tenant-onedrive-migration-step4) |
+| Guests/external users NOT in the map | They lose access — mapped guests keep it; anyone else must be re-invited by the user after migration | [Playbook assumption] — pilot item 21 |
+| "Anyone" links | Behaviour after the move is not documented — verify in the pilot (item 24) | [Playbook assumption] |
+| Mailbox permissions (Full Access / Send As / Send on Behalf) | Owned solely by `06-SharedMailboxes-Holds` — `08 Copy-MailConfig` no longer exports or imports them | Playbook design |
+| Dynamic distribution lists | Recreated hidden by `08 Copy-MailConfig -Include DynamicGroups`; review the filter, then unhide | Playbook design |

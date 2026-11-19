@@ -26,6 +26,7 @@ T-45 days → T+30 days. Every phase, script and **go/no-go gate** in one place.
 | T-28 | `03` for **pilot users only**: `New-TargetMailUsers` → `Test-TargetOneDriveAbsent` → scope group → `Invoke-CtimMapping` (fresh sessions; download before `-Overwrite`) → `Test-IdentityMapping -Mode Verify` → `Set-TargetLicenses` | **G4** pilot rows map and license cleanly |
 | T-26…T-22 | `04` **pilot**: a small batch of real pilot users through the whole flow in the production tenants; work `Pilot-Test-Checklist.md` and send the open questions to Microsoft | **G5** pilot checklist signed off — the only place hypotheses become facts |
 | T-21 | `03` for all remaining production identities (same chain as T-28): MailUsers → no-OneDrive check → scope group → CTIM → Verify → licence (24h-verification gate) | **G6** `Test-IdentityMapping` all rows Pass before licences are assigned |
+| T-20 | Guests + groups + SPO identity map (all before any ODSP/site move): `03 Export-SourceGuests` → `New-TargetGuests` → `Export-SourceGroups` → `07 New-TargetSiteGroups` → `New-TargetGroups` (members/owners in place **before** moves) → `New-SpoIdentityMap -Upload -Verify` → `New-SpoIdentityMap -CheckCompatibility` (source). Re-upload the **full** map after every identity change — upload overwrites | **G6b** identity map uploaded and verified; compatibility not Incompatible |
 
 ## T-14 → T-5 — batches, shared mailboxes, mail config
 
@@ -56,7 +57,7 @@ completion lands early Saturday:
 | H+3 | `09 Switch-TargetAddresses` — old addresses + X500s back **as aliases** (never primaries) | — |
 | H+4 | `09 Set-TargetUpn` (users) + `Set-TargetPrimaryAddress` (shared/resource mailboxes) — refuses non-Completed batches | **G13** only Completed users change |
 | H+5 | `09 Set-DomainDnsRecords` — MX/SPF/DKIM/autodiscover at the provider | — |
-| H+6 | `08 Copy-MailConfig -Mode Import` incl. apply-after-09 items | — |
+| H+6 | `06 Set-TargetMailboxPermissions` (Full Access/Send As/Send on Behalf — the only permission re-applier) + `08 Copy-MailConfig -Mode Import` incl. apply-after-09 items; DDGs are created **hidden** — review filters, then unhide | — |
 | H+7 | `09 Block-SourceSignIn -Exclude <break-glass>` | — |
 | H+8 | `11 Test-TargetTenant -FinalDomain <domain>` | **G14** validation green before Monday |
 

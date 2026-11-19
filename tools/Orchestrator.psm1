@@ -621,6 +621,82 @@ function Get-AddressMap {
     [pscustomobject]@{ Map = $map; Duplicates = @($dupes) }
 }
 
+function ConvertTo-SpoIdentityMapRow {
+    <#
+    .SYNOPSIS
+        Pure helper: renders ONE line of the SharePoint/OneDrive identity-map CSV.
+
+    .DESCRIPTION
+        The file has no header and six comma-separated columns; users and groups share it:
+          User row:      User,<SourceTenantId>,<SourceUpn>,<TargetUpn>,<TargetEmail>,<RegularUser|GuestUser>
+          Group row:     Group,<SourceTenantId>,<SourceGroupId>,<TargetGroupId>,<TargetGroupId>,RegularGroup
+          M365 group:    Group,<SourceTenantId>,<SourceGroupId>,<TargetGroupId>,<TargetAlias>,O365Group
+        For RegularGroup the Learn doc says GroupName = TargetGroupObjectId. The M365 row's
+        column 1 is shown as 'User' in the Learn example image but 'Group' in its table -
+        we write 'Group' (pilot item).
+        https://learn.microsoft.com/en-us/microsoft-365/migration/cross-tenant-onedrive-migration-step5
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$SourceTenantId,
+        [Parameter(Mandatory)][ValidateSet('User', 'Group', 'O365Group')][string]$Kind,
+        [Parameter(Mandatory)][string]$SourceKey,
+        [string]$TargetUpn,
+        [string]$TargetEmail,
+        [string]$TargetGroupId,
+        [string]$GroupAlias,
+        [ValidateSet('RegularUser', 'GuestUser')][string]$UserType = 'RegularUser'
+    )
+    switch ($Kind) {
+        'User'      { return "User,$SourceTenantId,$SourceKey,$TargetUpn,$TargetEmail,$UserType" }
+        'Group'     { return "Group,$SourceTenantId,$SourceKey,$TargetGroupId,$TargetGroupId,RegularGroup" }
+        'O365Group' { return "Group,$SourceTenantId,$SourceKey,$TargetGroupId,$GroupAlias,O365Group" }
+    }
+}
+
+function Test-SpoIdentityMap {
+    <#
+    .SYNOPSIS
+        Pure helper: validates rendered identity-map lines, returning ALL problems found.
+
+    .DESCRIPTION
+        Checks: exactly 6 columns; column 2 is a GUID; one-to-one (no duplicate source key in
+        col 3, no duplicate target in col 4); col 4 is a GUID on group rows; '#EXT#' present
+        in GuestUser source UPNs; no '.' in O365Group aliases. Returns a string array -
+        empty when the map is clean.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Rows
+    )
+    $problems = [System.Collections.Generic.List[string]]::new()
+    $seenSource = @{}; $seenTarget = @{}
+    $n = 0
+    foreach ($r in $Rows) {
+        $n++
+        $f = $r -split ','
+        if ($f.Count -ne 6) { $problems.Add("row $n : expected 6 columns, got $($f.Count)") ; continue }
+        if (-not [guid]::TryParse($f[1], [ref][guid]::Empty)) { $problems.Add("row $n : source tenant id '$($f[1])' is not a GUID") }
+        $src = $f[2].ToLower(); $tgt = $f[3].ToLower()
+        if ($seenSource.ContainsKey($src)) { $problems.Add("row $n : duplicate source '$src' (first seen row $($seenSource[$src]))") }
+        else { $seenSource[$src] = $n }
+        if ($tgt -and $seenTarget.ContainsKey($tgt)) { $problems.Add("row $n : duplicate target '$tgt' (first seen row $($seenTarget[$tgt]))") }
+        elseif ($tgt) { $seenTarget[$tgt] = $n }
+        switch ($f[0]) {
+            'User' {
+                if ($f[5] -eq 'GuestUser' -and $f[2] -notmatch '#EXT#') { $problems.Add("row $n : GuestUser source UPN '$($f[2])' lacks '#EXT#'") }
+            }
+            'Group' {
+                if (-not [guid]::TryParse($f[3], [ref][guid]::Empty)) { $problems.Add("row $n : target group id '$($f[3])' is not a GUID") }
+                if ($f[5] -eq 'O365Group' -and $f[4] -match '\.') { $problems.Add("row $n : M365 group alias '$($f[4])' must not contain '.'") }
+            }
+            default { $problems.Add("row $n : unknown record type '$($f[0])'") }
+        }
+    }
+    return @($problems)
+}
+
 Export-ModuleMember -Function Import-MigrationUserList, ConvertTo-WorkloadList, Split-MigrationBatch,
     ConvertTo-CrossTenantMigrationJobBody, Test-ValidationFresh, Compare-MigrationIdentity, Select-LicensableUser, Get-GraphValue,
-    Resolve-PermissionTrustee, ConvertFrom-InPlaceHold, Test-MigratedUserState, Get-AddressMap
+    Resolve-PermissionTrustee, ConvertFrom-InPlaceHold, Test-MigratedUserState, Get-AddressMap,
+    ConvertTo-SpoIdentityMapRow, Test-SpoIdentityMap
