@@ -39,6 +39,29 @@ migration-license and user-match checks.
     -TargetInventoryPath .\Inventory_Fabrikam_Target_20261023_101500
 ```
 
+## New-MigrationReadinessReport.ps1
+
+Offline, read-only. Reads the same inventory folder and writes `Readiness.md`:
+summary counts, the recommended Microsoft tool per workload (orchestrator /
+mailbox / OneDrive / SharePoint), migration-licence math, blockers (holds,
+Customer Key, public folders, apostrophe UPNs, >5 TB sites, locked sites,
+user-defined-permission labels), a "decide or rebuild" list, and what the
+inventory can't see ("not inventoried"). See
+[`docs/Migration-Method-Guide.md`](../docs/Migration-Method-Guide.md).
+
+```
+.\New-MigrationReadinessReport.ps1 -InventoryPath .\Inventory_Contoso_Source_20261022_090302 `
+    -TargetInventoryPath .\Inventory_Fabrikam_Target_20261023_101500
+```
+
+New/updated collections for the readiness report:
+
+| File | Source | Notes |
+|---|---|---|
+| `BookingsMailboxes.csv` | `Get-EXOMailbox -RecipientTypeDetails SchedulingMailbox` | Bookings isn't moved by any Microsoft tool |
+| `CustomerKey.csv` | `Get-DataEncryptionPolicy` (Exchange) + `Get-SPODataEncryptionPolicy` (SPO) | Customer Key blocks OneDrive/SharePoint moves; skipped with a warning if the SPO cmdlet isn't in the installed module |
+| `SensitivityLabels.csv` | `Get-Label` — now also exports `EncryptionType`/`LabelActions` | flags user-defined-permission labels that block site moves |
+
 ## Requirements
 
 - PowerShell 7.2+

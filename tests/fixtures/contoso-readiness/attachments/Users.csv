@@ -1,0 +1,7 @@
+UserPrincipalName,UserType,IsGuest,AssignedLicenses,OnPremisesSyncEnabled
+søren@contoso.com,Member,False,SPE_E3,False
+anna@contoso.com,Member,False,SPE_E3,False
+departed@contoso.com,Member,False,,False
+sync1@contoso.com,Member,False,SPE_E3,True
+o'hara@contoso.com,Member,False,SPE_E3,False
+guest1@fabrikam.com,Guest,True,,False

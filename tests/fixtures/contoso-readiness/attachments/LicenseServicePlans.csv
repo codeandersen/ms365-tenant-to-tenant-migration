@@ -1,0 +1,6 @@
+SkuPartNumber,ServicePlanName,ProvisioningStatus
+SPE_E3,EXCHANGE_S_STANDARD,Success
+SPE_E3,TEAMS1,Success
+SPE_E3,SHAREPOINTSTANDARD,Success
+SPE_E3,PROJECTWORKMANAGEMENT,Success
+SPE_E3,FLOW_FREE,Success

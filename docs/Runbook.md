@@ -10,7 +10,7 @@ T-45 days → T+30 days. Every phase, script and **go/no-go gate** in one place.
 
 | When | What | Gate |
 |---|---|---|
-| T-45 | `00-Assessment` inventory (`Collect-TenantInventory`, `Get-MigrationReport`) | — |
+| T-45 | `00-Assessment` inventory (`Collect-TenantInventory`, `Get-MigrationReport`, `New-MigrationReadinessReport` → `Readiness.md`, see `docs/Migration-Method-Guide.md`) | — |
 | T-42 | `01-Design`: fill `migration-users.csv` (onmicrosoft target addresses; `FinalUpn`/`FinalPrimarySmtp` for after the domain move), batches ≤100, workload mix, cutover weekend | **G1** user list signed off by business |
 | T-42 | `06` hold survey: `Get-HoldReport` — held mailboxes **cannot migrate** | **G2** legal decision per held mailbox |
 | T-40 | `07` site survey: `Get-SiteMigrationPlan` — native vs ShareGate track (item still open) | — |

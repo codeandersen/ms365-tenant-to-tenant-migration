@@ -1073,6 +1073,29 @@ function Invoke-Exchange {
         if ($pfMbx) { Export-CsvSafe -Data @($pfMbx | Select-Object DisplayName, PrimarySmtpAddress) -Name 'PublicFolderMailboxes.csv' }
     } catch {}
 
+    try {
+        # SchedulingMailbox = Bookings mailboxes (read-only detection for the readiness report)
+        $bookings = @(Get-EXOMailbox -RecipientTypeDetails SchedulingMailbox -ResultSize Unlimited -ErrorAction SilentlyContinue |
+            Select-Object DisplayName, PrimarySmtpAddress, RecipientTypeDetails)
+        if ($bookings) { Export-CsvSafe -Data @($bookings) -Name 'BookingsMailboxes.csv' }
+        $script:Summary.metrics.bookingsMailboxCount = $bookings.Count
+    } catch { Write-Log "Bookings mailbox check failed: $($_.Exception.Message)" -Level WARN }
+
+    try {
+        # Customer Key indicator: an enabled Exchange DEP blocks nothing here but is reported
+        # alongside the SharePoint DEP - Customer Key on the source blocks OneDrive/SPO moves.
+        if (Get-Command Get-DataEncryptionPolicy -ErrorAction SilentlyContinue) {
+            $dep = @(Get-DataEncryptionPolicy -ErrorAction SilentlyContinue | Select-Object Name, Identity, Enabled, State)
+            if ($dep) {
+                $rows = @($dep | ForEach-Object { [pscustomobject]@{ Service = 'Exchange'; Name = "$($_.Name)"; Enabled = "$($_.Enabled)"; State = "$($_.State)" } })
+                $existing = Join-Path $attachDir 'CustomerKey.csv'
+                if (Test-Path $existing) { $rows = @(Import-Csv $existing) + $rows }
+                Export-CsvSafe -Data $rows -Name 'CustomerKey.csv'
+                $script:Summary.metrics.customerKeyExchange = $true
+            }
+        }
+    } catch { Write-Log "Get-DataEncryptionPolicy failed: $($_.Exception.Message)" -Level WARN }
+
     # Summary metrics
     $script:Summary.metrics.mailboxCount = $mbxRows.Count
     $mbxByType = @{}
@@ -1151,7 +1174,8 @@ function Invoke-Purview {
     if ($cases)    { Export-CsvSafe -Data $cases -Name 'ComplianceCases.csv' }
     if ($holdRows.Count -gt 0) { Export-CsvSafe -Data $holdRows.ToArray() -Name 'CaseHoldPolicies.csv' }
 
-    $labels = @(Get-Label -ErrorAction SilentlyContinue | Select-Object DisplayName, Name, Priority, IsValid)
+    # EncryptionType/LabelActions flag labels with user-defined permissions - these block site moves.
+    $labels = @(Get-Label -ErrorAction SilentlyContinue | Select-Object DisplayName, Name, Priority, IsValid, EncryptionType, LabelActions)
     if ($labels) { Export-CsvSafe -Data $labels -Name 'SensitivityLabels.csv' }
 
     $dlp = @(Get-DlpCompliancePolicy -ErrorAction SilentlyContinue | Select-Object Name, Enabled, Mode, ExchangeLocation, SharePointLocation, OneDriveLocation, TeamsLocation)
@@ -1278,6 +1302,22 @@ function Invoke-SharePoint {
     } catch {
         Write-Log "Get-SPOExternalUser is not supported or failed: $($_.Exception.Message)" -Level WARN
     }
+
+    try {
+        # Customer Key on the source tenant blocks cross-tenant OneDrive/SharePoint moves.
+        if (Get-Command Get-SPODataEncryptionPolicy -ErrorAction SilentlyContinue) {
+            $dep = @(Get-SPODataEncryptionPolicy -ErrorAction SilentlyContinue)
+            if ($dep) {
+                $rows = @($dep | ForEach-Object { [pscustomobject]@{ Service = 'SharePoint/OneDrive'; Name = "$($_.Name)"; Enabled = "$($_.Enabled)"; State = "$($_.State)" } })
+                $existing = Join-Path $attachDir 'CustomerKey.csv'
+                if (Test-Path $existing) { $rows = @(Import-Csv $existing) + $rows }
+                Export-CsvSafe -Data $rows -Name 'CustomerKey.csv'
+                $script:Summary.metrics.customerKeySharePoint = $true
+            }
+        } else {
+            Write-Log "Get-SPODataEncryptionPolicy not available in the installed SPO module - Customer Key not checked." -Level WARN
+        }
+    } catch { Write-Log "Get-SPODataEncryptionPolicy failed: $($_.Exception.Message)" -Level WARN }
 }
 
 function Invoke-Teams {

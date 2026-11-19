@@ -9,7 +9,10 @@ dependency to unwind).
 Official docs: [Migration Orchestrator overview (Microsoft Learn)](https://learn.microsoft.com/microsoft-365/migration/migration-orchestrator-1-overview).
 
 **Start at [`docs/Runbook.md`](docs/Runbook.md)** — the canonical T-30 → T+30 timeline
-with go/no-go gates. Background material lives in [`docs/`](docs/).
+with go/no-go gates. Background material lives in [`docs/`](docs/) — including
+[`docs/Migration-Method-Guide.md`](docs/Migration-Method-Guide.md) (which tool
+moves which workload), [`docs/What-Doesnt-Move.md`](docs/What-Doesnt-Move.md)
+and [`docs/After-Cutover-User-Guide.md`](docs/After-Cutover-User-Guide.md).
 
 ## Read this first
 

@@ -1,0 +1,5 @@
+UserPrincipalName,RecipientTypeDetails,PrimarySmtpAddress,TotalItemSizeGB,HasAnyHold,HoldReasons,LitigationHoldEnabled,ArchiveStatus,ProhibitSendReceiveQuota
+søren@contoso.com,UserMailbox,søren@contoso.com,12.5,True,LitigationHold,True,None,49.5 GB
+anna@contoso.com,UserMailbox,anna@contoso.com,3.2,False,,False,None,49.5 GB
+shared1@contoso.com,SharedMailbox,shared1@contoso.com,60.0,False,,False,Active,50 GB
+room1@contoso.com,RoomMailbox,room1@contoso.com,1.0,False,,False,None,50 GB

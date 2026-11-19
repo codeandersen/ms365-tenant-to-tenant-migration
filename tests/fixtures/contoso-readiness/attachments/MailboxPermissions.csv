@@ -1,0 +1,2 @@
+Mailbox,MailboxType,User,AccessRights
+shared1@contoso.com,SharedMailbox,anna@contoso.com,FullAccess

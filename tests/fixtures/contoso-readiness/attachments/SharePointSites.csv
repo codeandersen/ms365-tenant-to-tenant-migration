@@ -1,0 +1,4 @@
+Url,Template,StorageUsageGB,LockState,IsTeamsConnected
+https://contoso.sharepoint.com/sites/sales,SITEPAGEPUBLISHING#0,150.0,Unlock,False
+https://contoso.sharepoint.com/sites/pwa,PWA#0,100.0,Unlock,False
+https://contoso.sharepoint.com/sites/archive,STS#0,0.5,ReadOnly,False

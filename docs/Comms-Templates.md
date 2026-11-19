@@ -59,6 +59,9 @@ your old PC is still intact as a fallback reference.
 
 Subject: Working in the new environment — known issues and fixes
 
+Your day-1 checklist is in **After-Cutover-User-Guide** (attached / on <intranet>) — follow it
+for the new Outlook profile, meeting re-acceptance and mobile setup.
+
 - Meetings with **external guests may need a fresh invitation** — re-send if guests can't join.
 - A meeting series where **one occurrence was edited** keeps an old link — re-send the series.
 - Mobile mail/Teams: remove the old work account, add the new one.
