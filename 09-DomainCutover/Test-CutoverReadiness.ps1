@@ -150,7 +150,7 @@ else {
 # ------------------------------------------------------------ source
 Write-Host ''
 Write-Host "== Source ($SourceAdmin)" -ForegroundColor Cyan
-$exo = Connect-ExoTenant $SourceTenantId $SourceAdmin
+$null = Connect-ExoTenant $SourceTenantId $SourceAdmin
 $ctx = Connect-GraphTenant $SourceTenantId $SourceAdmin @('User.Read.All', 'Directory.Read.All', 'Application.Read.All', 'Domain.Read.All')
 Write-Host "Signed in as $($ctx.Account) to tenant $($ctx.TenantId)" -ForegroundColor Cyan
 $srcDomains = Get-GraphAll 'v1.0/domains'
@@ -181,7 +181,7 @@ else { Add-Result 'Source' 'App identifier URIs' 'PASS' 'None on the domain' }
 # ------------------------------------------------------------ destination
 Write-Host ''
 Write-Host "== Destination ($DestinationAdmin)" -ForegroundColor Cyan
-$exo = Connect-ExoTenant $DestinationTenantId $DestinationAdmin
+$null = Connect-ExoTenant $DestinationTenantId $DestinationAdmin
 $ctx = Connect-GraphTenant $DestinationTenantId $DestinationAdmin @('Domain.Read.All', 'Policy.Read.All', 'User.Read.All', 'Directory.Read.All')
 Write-Host "Signed in as $($ctx.Account) to tenant $($ctx.TenantId)" -ForegroundColor Cyan
 

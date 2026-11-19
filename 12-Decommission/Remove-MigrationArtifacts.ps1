@@ -105,7 +105,6 @@ $outDir = New-OutputFolder -Customer $Customer -Phase '12-Decommission'
 $stamp = Get-Date -Format 'yyyyMMdd-HHmm'
 
 $exoSteps = @('OrgRelationship', 'MigrationEndpoint')
-$ctimSteps = @('CtimData')
 $targetOnly = @('CtmsAppPermissions', 'BatchData', 'MigrationEndpoint')
 foreach ($s in $Step) {
     if ($Role -eq 'Source' -and $targetOnly -contains $s) { throw "$s is a target-side step. Rerun with -Role Target against the target tenant." }
@@ -124,7 +123,7 @@ if ($needsConfirm -and -not $AllBatchesTerminalConfirmed) {
 }
 $selfCheckSteps = @($Step | Where-Object { $sessionFreeSteps -notcontains $_ })
 if ($selfCheckSteps.Count -and $Role -eq 'Target') {
-    $ctx = Connect-MigrationGraph -TenantId $TenantId -AdminUpn $AdminUpn -Scopes 'CrossTenantContentMigration.Read.All'
+    $null = Connect-MigrationGraph -TenantId $TenantId -AdminUpn $AdminUpn -Scopes 'CrossTenantContentMigration.Read.All'
     $jobs = @(Get-MgBetaCrossTenantMigrationJob -All -ErrorAction SilentlyContinue)
     $open = @($jobs | Where-Object { "$((Get-GraphValue -Object $_ -Name 'status'))" -notin $terminal })
     if ($open) {
@@ -136,7 +135,7 @@ if ($selfCheckSteps.Count -and $Role -eq 'Target') {
 
 # ------------------------------------------------------------ BatchData (target)
 if ($Step -contains 'BatchData') {
-    $ctx = Connect-MigrationGraph -TenantId $TenantId -AdminUpn $AdminUpn -Scopes 'CrossTenantContentMigration.ReadWrite.All'
+    $null = Connect-MigrationGraph -TenantId $TenantId -AdminUpn $AdminUpn -Scopes 'CrossTenantContentMigration.ReadWrite.All'
     $jobs = @(Get-MgBetaCrossTenantMigrationJob -All)
     $jobs | ForEach-Object {
         [pscustomobject]@{ DisplayName = Get-GraphValue -Object $_ -Name 'displayName'; Id = Get-GraphValue -Object $_ -Name 'id'; Status = Get-GraphValue -Object $_ -Name 'status' }
@@ -173,7 +172,7 @@ if ($Step -contains 'CtimData') {
 # ------------------------------------------------------------ CtimServicePrincipal
 if ($Step -contains 'CtimServicePrincipal') {
     if (-not (Get-Command Remove-CtimServicePrincipal -ErrorAction SilentlyContinue)) { throw 'CrossTenantIdentityMapping module not loaded.' }
-    $ctx = Connect-MigrationGraph -TenantId $TenantId -AdminUpn $AdminUpn -Scopes 'Application.ReadWrite.All'
+    $null = Connect-MigrationGraph -TenantId $TenantId -AdminUpn $AdminUpn -Scopes 'Application.ReadWrite.All'
     try {
         if ($PSCmdlet.ShouldProcess("CTIM service principal ($Role)", 'Remove-CtimServicePrincipal')) {
             Remove-CtimServicePrincipal
@@ -219,7 +218,7 @@ if ($Step -contains 'CtmsAppPermissions') {
         }
     }
     else { Write-Warning 'Revoke-CTMSAppPermissions not found (CrossTenantMigration NuGet module not loaded) - running the documented SP cleanup only.' }
-    $ctx = Connect-MigrationGraph -TenantId $TenantId -AdminUpn $AdminUpn -Scopes 'Application.ReadWrite.All'
+    $null = Connect-MigrationGraph -TenantId $TenantId -AdminUpn $AdminUpn -Scopes 'Application.ReadWrite.All'
     # First-party IDs published on the Learn post-migration page.
     $ctimAppId = '90fb47fc-e46d-4fc5-9833-8517359f2daf'   # Identity Mapping 1P app
     $permissionId = '42eb8f30-cb38-433e-9651-006680f3b238' # IdentityMapping-Experimental-Internal.Read

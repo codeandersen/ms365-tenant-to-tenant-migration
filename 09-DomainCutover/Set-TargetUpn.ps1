@@ -80,7 +80,7 @@ foreach ($u in $users) {
 if (-not $work.Count) { throw 'No rows with FinalUpn or FinalPrimarySmtp in the user list.' }
 
 $outDir = New-OutputFolder -Customer $Customer -Phase '09-DomainCutover'
-$ctx = Connect-MigrationGraph -TenantId $TenantId -AdminUpn $AdminUpn -Scopes 'User.ReadWrite.All', 'Domain.Read.All'
+$null = Connect-MigrationGraph -TenantId $TenantId -AdminUpn $AdminUpn -Scopes 'User.ReadWrite.All', 'Domain.Read.All'
 
 # ---- 1. backup before change
 $backupFile = Join-Path $outDir "TargetUserBackup-$(Get-Date -Format 'yyyyMMdd-HHmm').csv"

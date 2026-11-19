@@ -83,7 +83,7 @@ if ($Only) {
 }
 if (-not $users.Count) { throw 'No users to process.' }
 
-$conn = Connect-MigrationExchange -TenantId $TenantId -AdminUpn $AdminUpn
+$null = Connect-MigrationExchange -TenantId $TenantId -AdminUpn $AdminUpn
 $accepted = @(Get-AcceptedDomain | ForEach-Object { "$($_.DomainName)".ToLower() })
 
 $report = [System.Collections.Generic.List[object]]::new()

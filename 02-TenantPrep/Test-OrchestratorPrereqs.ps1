@@ -110,7 +110,7 @@ elseif ([version]$beta[0] -lt [version]'2.33.0') { Add-Check 'Modules' 'Graph/Be
 else { Add-Check 'Modules' 'Graph/Beta alignment' 'Pass' "Microsoft.Graph and Microsoft.Graph.Beta both $($ga[0])" }
 
 # ------------------------------------------------------------ Exchange Online
-$conn = Connect-MigrationExchange -TenantId $TenantId -AdminUpn $AdminUpn
+$null = Connect-MigrationExchange -TenantId $TenantId -AdminUpn $AdminUpn
 
 $rels = @(Get-OrganizationRelationship -ErrorAction SilentlyContinue)
 $rel = if ($PartnerTenantId) { $rels | Where-Object { $_.DomainNames -contains $PartnerTenantId } | Select-Object -First 1 }
