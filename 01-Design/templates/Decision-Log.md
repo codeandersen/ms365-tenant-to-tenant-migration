@@ -12,6 +12,6 @@ copy it into `customers/<name>/` and fill the Decision column per project.
 | 5 | How are mailboxes on hold handled? | Holds block moves. Identify in assessment; deal with in phase 06 before licensing/batching. | | | [Documented] mailboxes on any hold are not migrated. |
 | 6 | Shared/resource mailboxes? | Not part of user batches; handled in phase 06. | | | |
 | 7 | SharePoint content approach? | Orchestrator covers OneDrive (ODSP workload); site collections need a separate tool decision. | | | Open — see 07-SharePoint-Teams when added. |
-| 8 | Devices? | No in-place device move; new PCs enrol directly in target via Autopilot/Intune (phase 10). | | | |
+| 8 | Device strategy? | **NewDevices** - users get new PCs registered in the target's Autopilot (vendor/reseller uploads hashes; old PCs retired per phase 10) — OR **ExistingDevices** - current PCs must move (Entra-joined devices can belong to one tenant only; source Autopilot registrations must be deregistered first; method is an open decision - native reset/re-enrol vs third-party/in-place rejoin; not scripted) — OR **Unknown** - decide before migration. | NewDevices | | |
 | 9 | How are shared-mailbox permissions handled? | Recreate Send As / Full Access in phase 06. | | | |
 | 10 | Who signs in where? | Source admin for CTIM copy + scope group; target admin for everything else (MailUsers, accept/map/write, batches). | | | |

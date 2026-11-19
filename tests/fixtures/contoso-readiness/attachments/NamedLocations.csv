@@ -1,0 +1,4 @@
+Id,DisplayName,Type,IsTrusted,IpRanges,CountriesAndRegions,IncludeUnknownCountriesAndRegions,CreatedDateTime,ModifiedDateTime
+n1,Headquarters,ip,True,192.0.2.0/24;10.0.0.0/8,,False,2025-01-01T00:00:00Z,2025-01-01T00:00:00Z
+n2,Branch office,ip,False,198.51.100.0/24,,False,2025-01-01T00:00:00Z,2025-01-01T00:00:00Z
+n3,Allowed countries,country,False,,DK;SE,False,2025-01-01T00:00:00Z,2025-01-01T00:00:00Z

@@ -5,7 +5,9 @@ Written for end users. Everything here is generic — adapt names and dates per 
 ## Before cutover
 
 - You receive a **new PC**. It signs you in to the new environment.
-- You may sign in on the new PC ahead of time to register MFA — but **do not open Outlook,
+- You may sign in on the new PC ahead of time to register MFA (your old MFA registration
+  does not move — it must be set up in the new environment; a Temporary Access Pass may
+  be provided by the help desk) — but **do not open Outlook,
   OneDrive or Teams on it yet**: your data isn't there until the cutover finishes.
 - Keep using the old PC as normal until cutover weekend.
 - Files you keep **outside** OneDrive (Desktop if not synced, local folders, PST files) do not

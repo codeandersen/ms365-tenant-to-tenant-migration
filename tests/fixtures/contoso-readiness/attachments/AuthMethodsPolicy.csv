@@ -1,0 +1,6 @@
+Id,MethodType,State,IncludeTargets
+microsoftAuthenticator,microsoftAuthenticator,enabled,all_users:user
+fido2,fido2,enabled,all_users:user
+temporaryAccessPass,temporaryAccessPass,enabled,all_users:user
+sms,sms,disabled,all_users:user
+registrationCampaign,registrationCampaign,enabled,all_users:user

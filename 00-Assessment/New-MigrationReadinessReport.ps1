@@ -23,6 +23,12 @@
 .PARAMETER InventoryPath
     Folder produced by Collect-TenantInventory.ps1 (contains attachments\).
 
+.PARAMETER DeviceStrategy
+    Project device strategy: NewDevices (users get new PCs registered in the target
+    Autopilot - phase 10 track), ExistingDevices (current PCs must move - open method
+    decision, not scripted), or Unknown (default - report shows both implications and
+    asks for the decision). Record the decision in 01-Design/templates/Decision-Log.md.
+
 .PARAMETER TargetInventoryPath
     Optional target-tenant inventory folder for domain-conflict and licence checks.
 
@@ -41,6 +47,9 @@ param(
     [string]$InventoryPath,
 
     [string]$TargetInventoryPath,
+
+    [ValidateSet('NewDevices', 'ExistingDevices', 'Unknown')]
+    [string]$DeviceStrategy = 'Unknown',
 
     [string]$OutFile
 )
@@ -149,7 +158,12 @@ $inConn       = Import-AttCsv 'InboundConnectors.csv'
 $outConn      = Import-AttCsv 'OutboundConnectors.csv'
 $appRegs      = Import-AttCsv 'AppRegistrations.csv'
 $entApps      = Import-AttCsv 'EnterpriseApplications.csv'
-$caPolicies   = Import-AttCsv 'ConditionalAccessPolicies.csv'
+$caPolicies   = Import-AttCsv 'ConditionalAccess.csv'
+if ($caPolicies.Count -eq 0) { $caPolicies = Import-AttCsv 'ConditionalAccessPolicies.csv' }  # older inventories
+$namedLocs    = Import-AttCsv 'NamedLocations.csv'
+$authMethods  = Import-AttCsv 'AuthMethodsPolicy.csv'
+$mfaRegs      = Import-AttCsv 'MfaRegistration.csv'
+$autopilot    = Import-AttCsv 'AutopilotDevices.csv'
 $extUsers     = Import-AttCsv 'ExternalUsers.csv'
 $appSignIns   = Import-AttCsv 'AppSignInActivity.csv'
 
@@ -190,7 +204,14 @@ if ($TargetInventoryPath) {
         Domains   = Import-AttCsv 'AcceptedDomains.csv' -Base $tAttach
         OneDrives = Import-AttCsv 'OneDrive.csv' -Base $tAttach
         Sites     = Import-AttCsv 'SharePointSites.csv' -Base $tAttach
+        Ca        = Import-AttCsv 'ConditionalAccess.csv' -Base $tAttach
+        NamedLocs = Import-AttCsv 'NamedLocations.csv' -Base $tAttach
+        AuthMethods = Import-AttCsv 'AuthMethodsPolicy.csv' -Base $tAttach
         Attach    = $tAttach
+    }
+    $tSum = Join-Path $TargetInventoryPath 'summary.json'
+    if (Test-Path $tSum) {
+        try { $target | Add-Member -NotePropertyName Metrics -NotePropertyValue ((Get-Content $tSum -Raw | ConvertFrom-Json).metrics) } catch {}
     }
 }
 
@@ -383,9 +404,145 @@ if ($pfMbx.Count -gt 0) {
 $null = $r.AppendLine((Format-Table $methodRows @('Workload', 'Tool', 'Why', 'Source')))
 $null = $r.AppendLine('')
 
-# 3. Licences -------------------------------------------------------------------
+# 4. Devices ----------------------------------------------------------------------
 
-$null = $r.AppendLine('## 4. Licences')
+$joinCounts = @{}
+foreach ($d in $devices) { $k = if ($d.JoinType) { $d.JoinType } else { 'unknown' }; $joinCounts[$k] = @($joinCounts[$k]) + 1 }
+$entraJoined  = @($devices | Where-Object { $_.JoinType -eq 'Entra joined' }).Count
+$hybridJoined = @($devices | Where-Object { $_.JoinType -eq 'Hybrid Entra joined' }).Count
+$registered   = @($devices | Where-Object { $_.JoinType -eq 'Entra registered' }).Count
+$mobileDev    = @($devices | Where-Object { "$($_.OperatingSystem)" -match 'Android|iOS|iPadOS' }).Count
+$staleDev     = @()
+if ($devices.Count -gt 0 -and ($devices[0].PSObject.Properties.Name -contains 'ApproximateLastSignInDateTime')) {
+    $staleDev = @($devices | Where-Object {
+        $v = "$($_.ApproximateLastSignInDateTime)"
+        $v -and ([datetime]::Parse($v, [cultureinfo]::InvariantCulture) -lt [datetime]::UtcNow.AddDays(-90))
+    })
+}
+
+$null = $r.AppendLine('## 4. Devices')
+$null = $r.AppendLine('')
+$null = $r.AppendLine("Device strategy: **$DeviceStrategy** - set with `-DeviceStrategy NewDevices|ExistingDevices` once decided (see `01-Design/templates/Decision-Log.md`, row 'Device strategy').")
+$null = $r.AppendLine('')
+if ($devices.Count -gt 0) {
+    $devRows = @(
+        [pscustomobject]@{ Metric = 'Entra devices total';                 Count = $devices.Count }
+        [pscustomobject]@{ Metric = 'Entra joined';                        Count = $entraJoined }
+        [pscustomobject]@{ Metric = 'Hybrid Entra joined';                 Count = $hybridJoined }
+        [pscustomobject]@{ Metric = 'Entra registered (incl. mobile/BYOD)'; Count = $registered }
+        [pscustomobject]@{ Metric = 'Intune-managed';                      Count = $intuneDevs.Count }
+        [pscustomobject]@{ Metric = 'Autopilot-registered';                Count = $autopilot.Count }
+        [pscustomobject]@{ Metric = 'Mobile OS (Android/iOS)';             Count = $mobileDev }
+        [pscustomobject]@{ Metric = 'Stale (>90 days no sign-in)';         Count = $staleDev.Count }
+    )
+    $null = $r.AppendLine((Format-Table $devRows @('Metric', 'Count')))
+} else {
+    $null = $r.AppendLine('_Entra devices not inventoried (EntraDevices.csv)._')
+    $notInventoried.Add('Device join types and Autopilot registrations (EntraDevices/AutopilotDevices.csv)')
+}
+$null = $r.AppendLine('')
+
+switch ($DeviceStrategy) {
+    'NewDevices' {
+        $null = $r.AppendLine('**Track 1 - new devices (phase 10 scripts apply).**')
+        $null = $r.AppendLine('')
+        $null = $r.AppendLine("- Old PCs are retired per phase 10: data check -> wipe -> delete Intune, Autopilot and Entra objects - the **Entra object is deleted last** because BitLocker recovery keys are escrowed on it.")
+        $null = $r.AppendLine("- $($devices.Count) source devices to retire; $mobileDev mobile devices: users remove the old work account and re-enrol in the target.")
+        $null = $r.AppendLine('- Target to-dos (not blockers): Autopilot profile + Enrollment Status Page, enrollment restrictions, compliance policies, and the hardware vendor/reseller registering each new PC hash in the **target** Autopilot before handout.')
+        $null = $r.AppendLine('')
+    }
+    'ExistingDevices' {
+        $null = $r.AppendLine('**Track 2 - existing devices must move (not scripted - open method decision).**')
+        $null = $r.AppendLine('')
+        $null = $r.AppendLine('What must be decided/addressed before batches:')
+        $null = $r.AppendLine('')
+        $null = $r.AppendLine("- **$entraJoined Entra-joined devices** must leave the source tenant - a Windows device can only be Entra joined to one tenant.")
+        $null = $r.AppendLine("- **$hybridJoined hybrid-joined devices** are not moved by the tenant change [Playbook assumption - verify].")
+        $null = $r.AppendLine("- **$($autopilot.Count) Autopilot registrations** must be deregistered in the source before the hardware hash can be registered in the target [Playbook assumption - verify].")
+        $null = $r.AppendLine('- BitLocker recovery keys are escrowed in the **source** - export them (phase 10 `Get-BitLockerKeyReport`) before anything is removed.')
+        $null = $r.AppendLine('- A device reset/wipe loses data outside OneDrive; profile migration is a separate problem.')
+        $null = $r.AppendLine('')
+        $null = $r.AppendLine('Method is an open decision (record in `Decision-Log.md`): Microsoft-native (deregister Autopilot + register hash in target + reset/re-enrol) vs third-party/in-place rejoin. The playbook does not script this track.')
+        $null = $r.AppendLine('')
+    }
+    default {
+        $null = $r.AppendLine("- **NewDevices**: old PCs retired per phase 10; new PCs pre-registered in the target Autopilot by the vendor.")
+        $null = $r.AppendLine("- **ExistingDevices**: $entraJoined Entra-joined + $hybridJoined hybrid-joined + $($autopilot.Count) Autopilot devices must be moved - method is an open decision, not scripted.")
+        $null = $r.AppendLine('')
+        $null = $r.AppendLine('**Decide the device strategy (Decision-Log row ''Device strategy'') and re-run with `-DeviceStrategy`.**')
+        $null = $r.AppendLine('')
+    }
+}
+
+# 5. Sign-in and access -----------------------------------------------------------
+
+$null = $r.AppendLine('## 5. Sign-in and access (Conditional Access, MFA)')
+$null = $r.AppendLine('')
+$mfaRegCount = @($mfaRegs | Where-Object { $_.IsMfaRegistered -eq 'True' }).Count
+$null = $r.AppendLine("- **MFA registration does not move between tenants** - every migrated user registers MFA in the target at first sign-in (tenant-specific registration). Source scale: **$mfaRegCount** user(s) registered for MFA.")
+if ($target -and $target.AuthMethods.Count -gt 0) {
+    $tap = @($target.AuthMethods | Where-Object { $_.MethodType -match 'temporaryAccessPass' -and $_.State -eq 'enabled' })
+    if ($tap) {
+        $null = $r.AppendLine('- Target allows **Temporary Access Pass** - recommend issuing a TAP per user for first sign-in/MFA onboarding.')
+    } else {
+        $null = $r.AppendLine('- Target does **not** allow Temporary Access Pass (or not inventoried) - MFA onboarding relies on the user registering methods at first sign-in; consider enabling TAP.')
+    }
+}
+$null = $r.AppendLine('- Conditional Access policies, named locations and authentication-method settings are tenant configuration and do not migrate - recreate them in the target.')
+$null = $r.AppendLine('')
+$null = $r.AppendLine('**Source tenant**')
+$null = $r.AppendLine('')
+if ($namedLocs.Count -gt 0 -or $caPolicies.Count -gt 0) {
+    $trusted = @($namedLocs | Where-Object { $_.IsTrusted -eq 'True' })
+    $countries = @($namedLocs | Where-Object { $_.Type -eq 'country' })
+    $caEnabled = @($caPolicies | Where-Object { $_.State -eq 'enabled' })
+    $caReport  = @($caPolicies | Where-Object { $_.State -match 'report' })
+    $null = $r.AppendLine("- Named locations: **$($namedLocs.Count)** ($($trusted.Count) trusted IP locations, $($countries.Count) country locations) - export for the target admin with `00-Assessment/Export-TrustedLocations.ps1`.")
+    $null = $r.AppendLine("- Conditional Access policies: **$($caPolicies.Count)** ($($caEnabled.Count) enabled, $($caReport.Count) report-only) - recreate in the target after the trusted locations exist.")
+    $null = $r.AppendLine('')
+} else {
+    $null = $r.AppendLine('- Named locations / CA policies not inventoried (or none).')
+    $null = $r.AppendLine('')
+}
+$null = $r.AppendLine('**Target tenant**')
+$null = $r.AppendLine('')
+if ($target) {
+    $secDef = if ($target.Metrics -and $null -ne $target.Metrics.securityDefaultsEnabled) { $target.Metrics.securityDefaultsEnabled } else { 'unknown' }
+    $null = $r.AppendLine("- Security defaults enabled: **$secDef** (when enabled, CA policies are off - decide which model the target uses).")
+    $tCaEnabled = @($target.Ca | Where-Object { $_.State -eq 'enabled' })
+    if ($tCaEnabled.Count -gt 0) {
+        $null = $r.AppendLine("- **$($tCaEnabled.Count) enabled CA policies** - likely impact on migrated users/devices:")
+        $null = $r.AppendLine('')
+        $impact = [ordered]@{
+            'Require compliant or hybrid-joined device (blocks PCs/phones until enrolled in the target - critical for ExistingDevices, and for new PCs before the ESP completes)' =
+                @($tCaEnabled | Where-Object { $_.GrantControls -match 'compliantDevice|domainJoinedDevice' })
+            'Location/country conditions (needs the exported trusted locations in place first)' =
+                @($tCaEnabled | Where-Object { "$($_.IncludeLocations)$($_.ExcludeLocations)" -match '\w' -or $_.ConditionsJson -match '"locations"' })
+            'Require MFA / authentication strength (expected: users register MFA at first sign-in)' =
+                @($tCaEnabled | Where-Object { $_.GrantControls -match 'mfa' -or "$($_.AuthenticationStrength)" })
+            'Block legacy authentication (old clients/protocols will fail)' =
+                @($tCaEnabled | Where-Object { $_.ClientAppTypes -match 'exchangeActiveSync|other' -and $_.GrantControls -match 'block' })
+            'Require approved client app / app protection policy (mobile)' =
+                @($tCaEnabled | Where-Object { $_.GrantControls -match 'approvedApplication|compliantApplication' })
+            'Sign-in/user risk or session controls' =
+                @($tCaEnabled | Where-Object { "$($_.ConditionsJson)" -match 'signInRiskLevels|userRiskLevels' -or "$($_.SessionControls)" -match '\w' })
+        }
+        $impactRows = foreach ($k in $impact.Keys) {
+            if ($impact[$k].Count -gt 0) { [pscustomobject]@{ Impact = $k; Policies = (($impact[$k] | ForEach-Object DisplayName) -join ', ') } }
+        }
+        if ($impactRows) { $null = $r.AppendLine((Format-Table @($impactRows) @('Impact', 'Policies'))) }
+    } else {
+        $null = $r.AppendLine('- No enabled CA policies inventoried in the target.')
+    }
+    $null = $r.AppendLine('')
+} else {
+    $null = $r.AppendLine('- Target CA/named locations not inventoried - run `Collect-TenantInventory.ps1 -Role Target` and pass `-TargetInventoryPath`.')
+    $null = $r.AppendLine('')
+}
+
+# 6. Licences -------------------------------------------------------------------
+
+$null = $r.AppendLine('## 6. Licences')
 $null = $r.AppendLine('')
 $ctUserLic = $userMbx.Count + $sharedMbx.Count + $standaloneOd.Count
 $sharedDataLic = if ($spGB -gt 0) { [math]::Ceiling($spGB / 100) } else { 0 }
@@ -459,9 +616,9 @@ if ($target -and $target.Licenses.Count -gt 0) {
     $null = $r.AppendLine('')
 }
 
-# 4. Blockers --------------------------------------------------------------------
+# 7. Blockers --------------------------------------------------------------------
 
-$null = $r.AppendLine('## 5. Must be addressed before migration (blockers)')
+$null = $r.AppendLine('## 7. Must be addressed before migration (blockers)')
 $null = $r.AppendLine('')
 
 function Add-Blocker {
@@ -593,9 +750,9 @@ if ($target) {
         $preOd 'Url' $null
 }
 
-# 5. Decisions / rebuild ------------------------------------------------------------
+# 8. Decisions / rebuild ------------------------------------------------------------
 
-$null = $r.AppendLine('## 6. Needs a decision or rebuild (not migrated by Microsoft tools)')
+$null = $r.AppendLine('## 8. Needs a decision or rebuild (not migrated by Microsoft tools)')
 $null = $r.AppendLine('')
 $decRows = [System.Collections.Generic.List[object]]::new()
 function Add-Decision { param([string]$Item, [int]$Count, [string]$Note)
@@ -700,9 +857,9 @@ if ($appSignIns.Count -gt 0) {
     }
 }
 
-# 6. Not inventoried ----------------------------------------------------------------
+# 9. Not inventoried ----------------------------------------------------------------
 
-$null = $r.AppendLine('## 7. Not inventoried')
+$null = $r.AppendLine('## 9. Not inventoried')
 $null = $r.AppendLine('')
 $null = $r.AppendLine('The report cannot see the following - check them manually or add them to the customer questions ([docs/Customer-Questions.md]($RepoDocs/Customer-Questions.md)):')
 $null = $r.AppendLine('')

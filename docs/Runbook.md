@@ -14,7 +14,8 @@ T-45 days → T+30 days. Every phase, script and **go/no-go gate** in one place.
 | T-42 | `01-Design`: fill `migration-users.csv` (onmicrosoft target addresses; `FinalUpn`/`FinalPrimarySmtp` for after the domain move), batches ≤100, workload mix, cutover weekend | **G1** user list signed off by business |
 | T-42 | `06` hold survey: `Get-HoldReport` — held mailboxes **cannot migrate** | **G2** legal decision per held mailbox |
 | T-40 | `07` site survey: `Get-SiteMigrationPlan` — native vs ShareGate track (item still open) | — |
-| T-40 | `10` device survey: `Get-DeviceInventory`, `Get-BitLockerKeyReport`; order new PCs | — |
+| T-40 | `10` device survey: `Get-DeviceInventory`, `Get-BitLockerKeyReport`; if Track 1 (NewDevices): order new PCs; if Track 2 (ExistingDevices): decide method (Decision-Log) — see `10-Devices/README.md` tracks | — |
+| T-30 | `00 Export-TrustedLocations.ps1` on the source inventory (+ `office-ip-ranges.csv`); hand `TrustedLocations-for-target.*` to the **target admin** to create named locations before CA policies are recreated | — |
 | T-38…T-31 | `04` **technical test** on a *test tenant pair*: the full backbone end to end. The domain/UPN order can only be rehearsed here, with a test domain — a domain can't be moved partially, so this is the only place the 09 hypothesis gets a dry run | — |
 
 ## T-30 → T-21 — tenant preparation and pilot
@@ -27,6 +28,7 @@ T-45 days → T+30 days. Every phase, script and **go/no-go gate** in one place.
 | T-26…T-22 | `04` **pilot**: a small batch of real pilot users through the whole flow in the production tenants; work `Pilot-Test-Checklist.md` and send the open questions to Microsoft | **G5** pilot checklist signed off — the only place hypotheses become facts |
 | T-26…T-22 (optional) | `07 Export-TeamsChannelsToPdf.ps1` (read-only, source) on the pilot teams — hand PDFs + coverage to the source admin, who decides archive-vs-import (checklist item 27) | Decision recorded in `Decision-Log.md` |
 | T-21 | `03` for all remaining production identities (same chain as T-28): MailUsers → no-OneDrive check → scope group → CTIM → Verify → licence (24h-verification gate) | **G6** `Test-IdentityMapping` all rows Pass before licences are assigned |
+| T-21 | **Target sign-in review**: run `Collect-TenantInventory -Role Target` → `New-MigrationReadinessReport -TargetInventoryPath` — check target CA policies against migrated users/devices (device-compliance policies block unenrolled PCs; location policies need the trusted locations imported first; MFA method policy vs TAP for first sign-in) | **G6c** target CA does not lock out pilot users/devices |
 | T-20 | Guests + groups + SPO identity map (all before any ODSP/site move): `03 Export-SourceGuests` → `New-TargetGuests` → `Export-SourceGroups` → `07 New-TargetSiteGroups` → `New-TargetGroups` (members/owners in place **before** moves) → `New-SpoIdentityMap -Upload -Verify` → `New-SpoIdentityMap -CheckCompatibility` (source). Re-upload the **full** map after every identity change — upload overwrites | **G6b** identity map uploaded and verified; compatibility not Incompatible |
 
 ## T-14 → T-5 — batches, shared mailboxes, mail config

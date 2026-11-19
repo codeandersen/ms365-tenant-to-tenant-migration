@@ -7,6 +7,9 @@ The list is in the order you do things — day 1 first, then the first week.
 
 1. **Sign in on the new PC** with your new account `<new sign-in>`.
    Your old PC is untouched — leave it alone for now.
+   **Set up MFA right away:** your old MFA registration did not move — have your phone
+   ready and register the method the sign-in asks for (Authenticator app recommended).
+   If IT gave you a Temporary Access Pass code, use that first.
 2. **Outlook — create a new profile.** Don't reuse the old profile; it points at
    the old tenant. If Outlook offers your old account, remove it and add the new one.
    The first open can take a while while mail downloads.

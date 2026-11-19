@@ -69,6 +69,12 @@ Learn pages:
 | Microsoft 365 groups | Recreate / third-party | group mailbox not supported by MRS [Learn] |
 | Public folders | Third-party / PST / retire | no Microsoft tool [Learn] |
 | Teams teams & channels | Recreate (+ third-party for posts) | structure + membership manual (07) |
+| Devices | No migration tool - strategy decision | `NewDevices`: new PCs in target Autopilot (10); `ExistingDevices`: open method decision, not scripted |
+
+Device-independent sign-in note: MFA registration does not move between tenants -
+every user registers MFA in the target at first sign-in. Conditional Access policies,
+named locations and authentication-method settings are tenant configuration and are
+recreated in the target (source locations exported via `00 Export-TrustedLocations.ps1`).
 
 ## Licence math (what the readiness report computes)
 

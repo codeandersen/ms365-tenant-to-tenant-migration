@@ -1,0 +1,3 @@
+Id,MethodType,State,IncludeTargets
+temporaryAccessPass,temporaryAccessPass,enabled,all_users:user
+microsoftAuthenticator,microsoftAuthenticator,enabled,all_users:user

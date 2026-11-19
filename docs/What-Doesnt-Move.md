@@ -153,10 +153,11 @@ Teams-connected site carries **SharePoint content only** — not the Teams struc
 
 | Doesn't migrate | What to do instead | Source |
 |---|---|---|
-| Conditional Access, MFA policies | Recreate in target | [Playbook assumption] |
+| Conditional Access policies, named locations, auth-method settings | Tenant configuration - recreate in target (`00 Export-TrustedLocations.ps1` produces a hand-over file for named locations) | [Learn](.../conditionalaccessroot-list-namedlocations) |
+| MFA registrations (users' methods) | Tenant-specific - every user registers MFA in the target at first sign-in; consider Temporary Access Pass for onboarding | [Playbook assumption] |
+| Intune policies and devices | Strategy decision (Decision-Log): NewDevices - new PCs enrol in target (phase 10); ExistingDevices - devices must leave the source tenant, method not scripted | [Playbook decision] |
 | App registrations / enterprise applications and consents | Recreate; grant flows in 02 cover migration apps only | [Playbook assumption] |
 | Purview: labels, DLP, retention, eDiscovery cases | Recreate in target | [Playbook assumption] |
-| Intune policies and devices | New PCs enrol in target (10); no device move | [Playbook decision] |
 | Custom domain / vanity UPNs | Phase 09 — domain removal, addresses, `Set-TargetUpn`, DNS | [Playbook assumption — hypothesis order] |
 | Cross-cloud moves (e.g. GCC → commercial) | Not supported | [Learn](.../cross-tenant-mailbox-migration) |
 | Same domain verified in both tenants simultaneously | Not possible — domain must leave the source first | [Learn](.../migration-orchestrator-1-overview) |

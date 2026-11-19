@@ -1,0 +1,4 @@
+Site,PublicIpCidr,IsTrusted,Notes
+Copenhagen HQ,192.0.2.0/24,True,Example RFC 5737 documentation range - replace with real office public IP
+Aarhus office,198.51.100.0/24,True,Example RFC 5737 documentation range
+Warehouse VPN egress,203.0.113.0/25,False,Example - mark trusted only when it is a fixed office IP

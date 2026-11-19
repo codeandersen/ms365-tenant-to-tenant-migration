@@ -122,4 +122,49 @@ Describe 'New-MigrationReadinessReport' {
         $md2 | Should -Match 'Not inventoried'
         $md2 | Should -Match 'Mailbox holds'
     }
+
+    It 'Devices section defaults to Unknown and shows counts + both implications' {
+        $script:Md | Should -Match '## 4\. Devices'
+        $script:Md | Should -Match 'Device strategy: \*\*Unknown\*\*'
+        $script:Md | Should -Match 'Entra joined\s*\|\s*2'
+        $script:Md | Should -Match 'Hybrid Entra joined\s*\|\s*1'
+        $script:Md | Should -Match 'Entra registered.*\|\s*2'
+        $script:Md | Should -Match 'Autopilot-registered\s*\|\s*2'
+        $script:Md | Should -Match 'Stale \(>90 days no sign-in\)\s*\|\s*1'
+        $script:Md | Should -Match 'Decide the device strategy'
+    }
+
+    It 'Devices section renders NewDevices and ExistingDevices tracks' {
+        & $script:Report -InventoryPath $script:Inv -DeviceStrategy NewDevices -OutFile (Join-Path $script:Inv 'R3.md')
+        $m = [System.IO.File]::ReadAllText((Join-Path $script:Inv 'R3.md'), [System.Text.Encoding]::UTF8)
+        $m | Should -Match 'Track 1 - new devices'
+        $m | Should -Match 'Entra object is deleted last'
+        $m | Should -Match 'vendor/reseller registering each new PC hash'
+        & $script:Report -InventoryPath $script:Inv -DeviceStrategy ExistingDevices -OutFile (Join-Path $script:Inv 'R4.md')
+        $m2 = [System.IO.File]::ReadAllText((Join-Path $script:Inv 'R4.md'), [System.Text.Encoding]::UTF8)
+        $m2 | Should -Match 'Track 2 - existing devices must move'
+        $m2 | Should -Match '2 Entra-joined devices'
+        $m2 | Should -Match 'one tenant'
+        $m2 | Should -Match 'deregistered in the source'
+        $m2 | Should -Match 'open decision'
+    }
+
+    It 'Sign-in and access section covers MFA scale, source locations and target CA impact' {
+        $tgt = Join-Path $PSScriptRoot 'fixtures\fabrikam-target-readiness'
+        & $script:Report -InventoryPath $script:Inv -TargetInventoryPath $tgt -DeviceStrategy NewDevices -OutFile (Join-Path $script:Inv 'R5.md')
+        $m = [System.IO.File]::ReadAllText((Join-Path $script:Inv 'R5.md'), [System.Text.Encoding]::UTF8)
+        $m | Should -Match '## 5\. Sign-in and access'
+        $m | Should -Match 'MFA registration does not move'
+        $m | Should -Match '\*\*2\*\* user\(s\) registered for MFA'
+        $m | Should -Match 'Temporary Access Pass'
+        $m | Should -Match 'Named locations: \*\*3\*\* \(1 trusted IP'
+        $m | Should -Match 'Export-TrustedLocations'
+        $m | Should -Match 'Security defaults enabled: \*\*False\*\*'
+        $m | Should -Match 'compliant or hybrid-joined device.*Target-RequireCompliant'
+        $m | Should -Match 'Target-MFA'
+    }
+
+    It 'Sign-in section degrades without target inventory' {
+        $script:Md | Should -Match 'not inventoried - run `Collect-TenantInventory'
+    }
 }

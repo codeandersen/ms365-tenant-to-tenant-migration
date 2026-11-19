@@ -1,0 +1,3 @@
+Id,DisplayName,State,CreatedDateTime,ModifiedDateTime,IncludeUsers,IncludeGroups,IncludeRoles,ExcludeUsers,ExcludeGroups,ExcludeRoles,IncludeApplications,ClientAppTypes,IncludePlatforms,IncludeLocations,ExcludeLocations,GrantOperator,GrantControls,AuthenticationStrength,SessionControls,ConditionsJson
+p1,CA-RequireMFA,enabled,2025-01-01T00:00:00Z,2025-01-01T00:00:00Z,All,,,,,,All,all,,,,OR,mfa,,,{}
+p2,CA-BlockLegacy,enabledForReportingButNotEnforced,2025-01-01T00:00:00Z,2025-01-01T00:00:00Z,All,,,,,,All,exchangeActiveSync;other,,,,OR,block,,,{}

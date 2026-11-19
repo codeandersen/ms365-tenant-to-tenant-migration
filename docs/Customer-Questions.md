@@ -43,7 +43,10 @@ Ask these before estimating or promising anything. Grouped by phase.
 
 - How are PCs joined today (Entra joined, hybrid, BYOD-registered)? Intune-managed?
 - BitLocker enabled? Who holds the process for retrieving an escrowed key?
-- Device plan: new PCs via Autopilot (this playbook's assumption) — is hardware procured?
+- Device strategy: do users get **new PCs**, or must the **existing PCs** be moved? (A Windows device can only be Entra joined to one tenant; moving existing devices is an open method decision.)
+- Fixed office public IPs / sites (for Conditional Access trusted locations in the target)?
+- Which countries do users sign in from (country named locations)?
+- Which MFA methods may the target allow — and is Temporary Access Pass acceptable for first sign-in?
 - Mobile devices / work profiles to re-enrol?
 
 ## Security & compliance

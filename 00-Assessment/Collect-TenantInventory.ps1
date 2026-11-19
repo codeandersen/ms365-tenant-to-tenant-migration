@@ -640,7 +640,7 @@ $script:SectionService = @{
 }
 
 $SourceSections = @('Tenant','Licenses','Users','Groups','Roles','Security','Apps','AppSignIns','Exchange','Purview','OneDrive','SharePoint','Teams','Devices','Usage','Dns')
-$TargetSections = @('Tenant','Licenses','Users','CrossTenant','TargetExchange')
+$TargetSections = @('Tenant','Licenses','Users','Security','CrossTenant','TargetExchange')
 
 # ---------- Source sections ----------
 
@@ -906,8 +906,22 @@ function Invoke-Security {
                 State         = $p.state
                 CreatedDateTime = $p.createdDateTime
                 ModifiedDateTime = $p.modifiedDateTime
-                ConditionsJson  = ($p.conditions | ConvertTo-Json -Depth 6 -Compress)
+                IncludeUsers    = ($p.conditions.users.includeUsers -join '; ')
+                IncludeGroups   = ($p.conditions.users.includeGroups -join '; ')
+                IncludeRoles    = ($p.conditions.users.includeRoles -join '; ')
+                ExcludeUsers    = ($p.conditions.users.excludeUsers -join '; ')
+                ExcludeGroups   = ($p.conditions.users.excludeGroups -join '; ')
+                ExcludeRoles    = ($p.conditions.users.excludeRoles -join '; ')
+                IncludeApplications = ($p.conditions.applications.includeApplications -join '; ')
+                ClientAppTypes  = ($p.conditions.clientAppTypes -join '; ')
+                IncludePlatforms = ($p.conditions.platforms.includePlatforms -join '; ')
+                IncludeLocations = ($p.conditions.locations.includeLocations -join '; ')
+                ExcludeLocations = ($p.conditions.locations.excludeLocations -join '; ')
+                GrantOperator   = "$($p.grantControls.operator)"
                 GrantControls   = ($p.grantControls.builtInControls -join '; ')
+                AuthenticationStrength = "$($p.grantControls.authenticationStrength.displayName)"
+                SessionControls = ($p.grantControls.sessionControls | ConvertTo-Json -Depth 4 -Compress)
+                ConditionsJson  = ($p.conditions | ConvertTo-Json -Depth 6 -Compress)
             }
         }
         Export-CsvSafe -Data $caRows -Name 'ConditionalAccess.csv'
@@ -917,6 +931,60 @@ function Invoke-Security {
         Write-Log "Conditional Access could not be fetched (requires P1): $($_.Exception.Message)" -Level WARN
         $script:Summary.metrics.conditionalAccessCount = 0
     }
+    }
+
+    # Named locations (trusted IPs / countries used by Conditional Access)
+    # https://learn.microsoft.com/en-us/graph/api/conditionalaccessroot-list-namedlocations
+    try {
+        $nl = Get-GraphAll -Uri 'https://graph.microsoft.com/v1.0/identity/conditionalAccess/namedLocations'
+        $nlRows = foreach ($l in $nl) {
+            $isIp = $l.'@odata.type' -match 'ipNamedLocation'
+            [pscustomobject]@{
+                Id                = $l.id
+                DisplayName       = $l.displayName
+                Type              = if ($isIp) { 'ip' } elseif ($l.'@odata.type' -match 'countryNamedLocation') { 'country' } else { "$($l.'@odata.type')" }
+                IsTrusted         = [bool]$l.isTrusted
+                IpRanges          = (($l.ipRanges | ForEach-Object cidrAddress) -join '; ')
+                CountriesAndRegions = ($l.countriesAndRegions -join '; ')
+                IncludeUnknownCountriesAndRegions = [bool]$l.includeUnknownCountriesAndRegions
+                CreatedDateTime   = $l.createdDateTime
+                ModifiedDateTime  = $l.modifiedDateTime
+            }
+        }
+        Export-CsvSafe -Data $nlRows -Name 'NamedLocations.csv'
+        $script:Summary.metrics.namedLocationCount = $nlRows.Count
+        $script:Summary.metrics.trustedIpLocationCount = @($nlRows | Where-Object { $_.Type -eq 'ip' -and $_.IsTrusted }).Count
+    } catch {
+        Write-Log "Named locations could not be fetched: $($_.Exception.Message)" -Level WARN
+        $script:Summary.metrics.namedLocationCount = 0
+    }
+
+    # Authentication methods policy (which methods the tenant allows / registration campaign)
+    # https://learn.microsoft.com/en-us/graph/api/authenticationmethodspolicy-get
+    try {
+        $amp = Invoke-MgGraphRequest -OutputType PSObject -Method GET -Uri 'https://graph.microsoft.com/v1.0/policies/authenticationMethodsPolicy'
+        $amRows = foreach ($c in @($amp.authenticationMethodConfigurations)) {
+            [pscustomobject]@{
+                Id            = $c.id
+                MethodType    = "$($c.'@odata.type')" -replace '#microsoft\.graph\.', '' -replace 'AuthenticationMethodConfiguration$', ''
+                State         = "$($c.state)"
+                IncludeTargets = (@($c.includeTargets) | ForEach-Object { "$($_.id):$($_.targetType)" }) -join '; '
+            }
+        }
+        if ($amp.registrationEnforcement) {
+            $rc = $amp.registrationEnforcement.authenticationMethodsRegistrationCampaign
+            $amRows += [pscustomobject]@{ Id = 'registrationCampaign'; MethodType = 'registrationCampaign'; State = "$($rc.state)"; IncludeTargets = ($rc.includeTargets | ForEach-Object { "$($_.id):$($_.targetType)" }) -join '; ' }
+        }
+        if ($amp.systemCredentialPreferences) {
+            $amRows += [pscustomobject]@{ Id = 'systemCredentialPreferences'; MethodType = 'systemPreferredMfa'; State = "$($amp.systemCredentialPreferences.state)"; IncludeTargets = '' }
+        }
+        Export-CsvSafe -Data $amRows -Name 'AuthMethodsPolicy.csv'
+        foreach ($k in 'microsoftAuthenticator','fido2','temporaryAccessPass','sms') {
+            $hit = @($amRows | Where-Object { $_.MethodType -match $k } | Select-Object -First 1)
+            $script:Summary.metrics["authMethod_$k"] = if ($hit) { $hit[0].State } else { 'unknown' }
+        }
+    } catch {
+        Write-Log "Authentication methods policy could not be fetched: $($_.Exception.Message)" -Level WARN
     }
 
     # Security defaults
@@ -2134,7 +2202,7 @@ if ($ServiceGroup) {
                       'DeviceManagementApps.Read.All','TeamSettings.Read.All','Channel.ReadBasic.All','TeamMember.Read.All',
                       'Domain.Read.All','Sites.Read.All','eDiscovery.Read.All')
                 } else {
-                    @('User.Read.All','Directory.Read.All','Organization.Read.All','Domain.Read.All','Policy.Read.All')
+                    @('User.Read.All','Directory.Read.All','Organization.Read.All','Domain.Read.All','Policy.Read.All','AuditLog.Read.All')
                 }
                 try {
                     Disconnect-MgGraph -ErrorAction SilentlyContinue | Out-Null

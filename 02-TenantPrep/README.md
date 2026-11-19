@@ -46,6 +46,7 @@ that cannot be scripted are manual portal steps listed below.
 | Teams federation `AllowFederatedUsers` | ✔ | ✔ |
 | Graph + Graph.Beta installed, same version, Beta ≥ 2.33.0 | both | both |
 | Cross-Tenant User Data Migration licences purchased | assign to source or target users later | |
+| Conditional Access / named locations / auth methods | export via `00 Export-TrustedLocations.ps1` | Target admin reviews: imports the trusted locations from the export file, reviews enabled CA policies against migrated users/devices (compliance, location, MFA, legacy-auth, app-protection), decides on Temporary Access Pass for first sign-in, and considers excluding the migration admin accounts appropriately |
 
 ## Files
 

@@ -1,8 +1,33 @@
-# 10 - Devices (new PCs)
+# 10 - Devices
+
+The device strategy is a **project decision** (Decision-Log row 'Device strategy',
+readiness report `-DeviceStrategy`): `NewDevices` (track 1, default for this playbook)
+or `ExistingDevices` (track 2 - not scripted).
+
+## Track 1 - New devices (default for this playbook)
 
 **Decision:** every user gets a **brand-new PC** enrolled directly in the target tenant via
 Autopilot/Intune. There is no in-place device move, no profile copy, and no domain rejoin
 (the toolkit's `Move-TenantDevices`/`Copy-ProfileData` path was considered and rejected).
+
+## Track 2 - Existing devices (not scripted)
+
+When the current PCs must follow the users, these facts apply — the **method is an open
+decision**, record it in the Decision-Log:
+
+- A Windows device can be **Entra joined to one tenant only** - every Entra-joined device
+  must leave the source tenant.
+- **Hybrid-joined** devices are not moved by the tenant change [playbook assumption - verify].
+- **Autopilot registrations must be deregistered in the source** before the hardware hash can
+  be registered in the target [playbook assumption - verify on Learn autopilot registration docs].
+- **BitLocker recovery keys are escrowed in the source** - run `Get-BitLockerKeyReport.ps1`
+  before anything is removed.
+- A device **reset/wipe loses data outside OneDrive**; user profiles are a separate problem.
+- Method options: Microsoft-native (deregister Autopilot -> register hash in target ->
+  reset/re-enrol) or third-party / in-place rejoin tooling.
+
+The scripts below still apply to both tracks: the inventory and BitLocker-key report tell you
+what exists, and the retirement plan applies whenever a device is eventually retired.
 
 ## New-PC checklist (target tenant)
 

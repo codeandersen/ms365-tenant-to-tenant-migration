@@ -1,0 +1,6 @@
+Id,DisplayName,JoinType,TrustType,OperatingSystem,OperatingSystemVersion,ApproximateLastSignInDateTime,IsManaged,IsCompliant,AccountEnabled
+d1,PC-001,Entra joined,AzureAd,Windows,10.0.22631,2026-11-18T08:00:00Z,True,True,True
+d2,PC-002,Entra joined,AzureAd,Windows,10.0.22631,2025-01-10T08:00:00Z,True,False,True
+d3,PC-003,Hybrid Entra joined,ServerAd,Windows,10.0.22631,2026-11-17T09:00:00Z,True,True,True
+d4,PHONE-01,Entra registered,Workplace,Android,14,2026-11-18T10:00:00Z,False,False,True
+d5,IPHONE-01,Entra registered,Workplace,iOS,17,2026-11-16T10:00:00Z,False,False,True

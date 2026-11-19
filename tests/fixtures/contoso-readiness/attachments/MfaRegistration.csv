@@ -1,0 +1,4 @@
+Id,UserPrincipalName,UserDisplayName,UserType,IsAdmin,IsMfaRegistered,IsMfaCapable,IsSsprRegistered,MethodsRegistered
+u1,anna@contoso.com,Anna A,Member,False,True,True,True,microsoftAuthenticatorPush
+u2,bo@contoso.com,Bo B,Member,False,True,True,False,sms
+u3,cam@contoso.com,Cam C,Member,False,False,True,False,

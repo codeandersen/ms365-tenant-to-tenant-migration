@@ -65,6 +65,16 @@ New/updated collections for the readiness report:
 | `MailboxStatistics.csv` | new `AuxArchiveCount` column | aux archive count per archive-enabled mailbox |
 | `summary.json` | new metrics `autoExpandingArchiveCount`, `auxArchiveMailboxCount`, `disabledArchiveCount`, `orgAutoExpandingArchive` | archive overview |
 | `AppSignInActivity.csv` | new `AppSignIns` section (source role): last sign-in per type per service principal from the Entra sign-in logs (beta, ≤30 days via `-SignInLookbackDays`), plus the service principal sign-in activity report (beta, preview) | roles: Reports Reader / Security Reader / Global Reader; sign-in logs need Entra ID P1 - without it the section falls back to the activity report. [signIn-list](https://learn.microsoft.com/en-us/graph/api/signin-list?view=graph-rest-beta), [servicePrincipalSignInActivities](https://learn.microsoft.com/en-us/graph/api/reportroot-list-serviceprincipalsigninactivities?view=graph-rest-beta) |
+| `ConditionalAccess.csv` | `GET /identity/conditionalAccess/policies` - now exports include/exclude users-groups-roles, applications, client app types, platforms, locations, grant controls, auth strength, session controls | CA policies are tenant config - recreate in the target |
+| `NamedLocations.csv` | `GET /identity/conditionalAccess/namedLocations` | trusted IP ranges / countries - hand to the target admin via `Export-TrustedLocations.ps1`. Metrics `namedLocationCount`, `trustedIpLocationCount` |
+| `AuthMethodsPolicy.csv` | `GET /policies/authenticationMethodsPolicy` | per-method state (microsoftAuthenticator/fido2/temporaryAccessPass/sms) + registration campaign. Metrics `authMethod_<method>` |
+| `Security` section | now also runs for `-Role Target` (scopes include Policy.Read.All + AuditLog.Read.All) | target CA / named locations / auth methods feed the readiness report's sign-in section |
+
+`Export-TrustedLocations.ps1` (offline, no tenant connection): builds the
+trusted-locations hand-over for the target admin from `NamedLocations.csv` + optional
+`01-Design/templates/office-ip-ranges.csv` → `TrustedLocations-for-target.csv` /
+`.json` (Graph POST bodies) / `TrustedLocations-README.md`. Validates CIDRs, flags
+private/reserved ranges, merges duplicates, warns on overlaps.
 
 ### Hand-over to the source admin: AppSignInActivity.csv
 

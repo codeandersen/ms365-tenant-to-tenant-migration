@@ -1,0 +1,4 @@
+Id,DeviceName,OperatingSystem,OsVersion,OwnerType,JoinType,EnrolledDateTime,LastSyncDateTime,ComplianceState,UserPrincipalName,Model,Manufacturer,AzureADDeviceId
+m1,PC-001,Windows,10.0.22631,company,azureADJoined,2025-06-01T00:00:00Z,2026-11-18T08:00:00Z,compliant,anna@contoso.com,X1,Lenovo,d1
+m2,PC-002,Windows,10.0.22631,company,azureADJoined,2025-06-01T00:00:00Z,2026-11-17T08:00:00Z,noncompliant,bo@contoso.com,X1,Lenovo,d2
+m3,PC-003,Windows,10.0.22631,company,hybridAzureADJoined,2025-06-01T00:00:00Z,2026-11-17T09:00:00Z,compliant,cam@contoso.com,X1,Lenovo,d3

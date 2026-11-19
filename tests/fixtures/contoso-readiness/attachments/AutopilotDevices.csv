@@ -1,0 +1,3 @@
+Id,SerialNumber,GroupTag,Manufacturer,Model,EnrollmentState
+ap1,SER-001,ContosoIT,Lenovo,X1,enrolled
+ap2,SER-002,ContosoIT,Lenovo,X1,enrolled
