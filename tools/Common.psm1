@@ -130,6 +130,134 @@ function Connect-MigrationExchange {
     return $conn
 }
 
+function ConvertFrom-OpenIdIssuer {
+    <#
+    .SYNOPSIS
+        Pure function: extracts the tenant GUID from an openid-configuration issuer URL.
+
+    .DESCRIPTION
+        The issuer in a tenant's .well-known/openid-configuration looks like
+        https://login.microsoftonline.com/<guid>/v2.0 (or the /sts/ variant). Returns the GUID
+        lower-cased, or throws when no GUID is present.
+
+    .PARAMETER Issuer
+        The issuer string from the openid-configuration response.
+
+    .EXAMPLE
+        ConvertFrom-OpenIdIssuer -Issuer 'https://login.microsoftonline.com/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/v2.0'
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Issuer
+    )
+    if ($Issuer -match '([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})') {
+        return $Matches[1].ToLower()
+    }
+    throw "Could not derive tenant GUID from issuer '$Issuer'."
+}
+
+function Get-TenantIdFromDomain {
+    <#
+    .SYNOPSIS
+        Resolves a tenant's ID (GUID) from a domain via the public openid-configuration endpoint.
+
+    .DESCRIPTION
+        Unauthenticated GET of https://login.microsoftonline.com/<domain>/v2.0/.well-known/openid-configuration
+        and extracts the GUID from the issuer (ConvertFrom-OpenIdIssuer). Idempotent for a GUID input.
+
+    .PARAMETER Domain
+        Any domain on the tenant (e.g. fabrikam.onmicrosoft.com) or an existing GUID.
+
+    .EXAMPLE
+        Get-TenantIdFromDomain -Domain 'fabrikam.onmicrosoft.com'
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Domain
+    )
+    if ($Domain -match '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$') {
+        return $Domain.ToLower()
+    }
+    $url = "https://login.microsoftonline.com/$Domain/v2.0/.well-known/openid-configuration"
+    $cfg = Invoke-RestMethod -Method GET -Uri $url -ErrorAction Stop
+    return ConvertFrom-OpenIdIssuer -Issuer $cfg.issuer
+}
+
+function Connect-MigrationTeams {
+    <#
+    .SYNOPSIS
+        Connects to Microsoft Teams for a migration session and asserts the tenant context.
+
+    .DESCRIPTION
+        Runs Connect-MicrosoftTeams -TenantId -AccountId, then reads (Get-CsTenant).TenantId and
+        calls Assert-TenantContext so the session is guaranteed to be in -TenantId before returning.
+
+    .PARAMETER TenantId
+        Tenant ID (GUID) the Teams session must belong to - asserted against Get-CsTenant.
+
+    .PARAMETER AdminUpn
+        The admin account to sign in with (-AccountId).
+
+    .EXAMPLE
+        Connect-MigrationTeams -TenantId 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' -AdminUpn 'admin@fabrikam.com'
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateScript({ [guid]::TryParse($_, [ref][guid]::Empty) })]
+        [string]$TenantId,
+
+        [Parameter(Mandatory)]
+        [string]$AdminUpn
+    )
+
+    Connect-MicrosoftTeams -TenantId $TenantId -AccountId $AdminUpn | Out-Null
+    $tenant = Get-CsTenant
+    if (-not $tenant) { throw 'Connect-MicrosoftTeams returned but Get-CsTenant is empty - cannot verify tenant context. Aborting.' }
+    Assert-TenantContext -ExpectedTenantId $TenantId -ActualTenantId "$($tenant.TenantId)" -ExpectedUpn $AdminUpn
+    return $tenant
+}
+
+function Connect-MigrationSharePoint {
+    <#
+    .SYNOPSIS
+        Connects to SharePoint Online for a migration session and asserts the tenant context.
+
+    .DESCRIPTION
+        There is no direct "what tenant am I connected to" cmdlet on the SPO side, so the guard
+        derives the tenant's onmicrosoft domain from -AdminUrl (<prefix>-admin.sharepoint.com ->
+        <prefix>.onmicrosoft.com), resolves that to a tenant GUID via Get-TenantIdFromDomain
+        (unauthenticated openid-configuration), and asserts it equals -TenantId before running
+        Connect-SPOService -Url.
+
+    .PARAMETER TenantId
+        Expected tenant ID (GUID).
+
+    .PARAMETER AdminUrl
+        SharePoint admin URL, e.g. https://fabrikam-admin.sharepoint.com.
+
+    .EXAMPLE
+        Connect-MigrationSharePoint -TenantId 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' -AdminUrl 'https://fabrikam-admin.sharepoint.com'
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateScript({ [guid]::TryParse($_, [ref][guid]::Empty) })]
+        [string]$TenantId,
+
+        [Parameter(Mandatory)]
+        [ValidatePattern('^https://[^\.]+-admin\.sharepoint\.com/?$')]
+        [string]$AdminUrl
+    )
+
+    $prefix = ($AdminUrl -replace '^https://', '') -replace '-admin\.sharepoint\.com/?$', ''
+    $derived = Get-TenantIdFromDomain -Domain "$($prefix).onmicrosoft.com"
+    Assert-TenantContext -ExpectedTenantId $TenantId -ActualTenantId $derived
+    Connect-SPOService -Url $AdminUrl
+}
+
 function Export-CsvSafe {
     <#
     .SYNOPSIS
@@ -253,4 +381,4 @@ function New-OutputFolder {
     return $path
 }
 
-Export-ModuleMember -Function Assert-TenantContext, Connect-MigrationGraph, Connect-MigrationExchange, Export-CsvSafe, Write-Log, New-OutputFolder
+Export-ModuleMember -Function Assert-TenantContext, Connect-MigrationGraph, Connect-MigrationExchange, Connect-MigrationTeams, Connect-MigrationSharePoint, Get-TenantIdFromDomain, ConvertFrom-OpenIdIssuer, Export-CsvSafe, Write-Log, New-OutputFolder

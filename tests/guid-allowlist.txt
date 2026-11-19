@@ -6,3 +6,4 @@ f8cdef31-a31e-4b4a-93e4-5f571e91255a # Microsoft's own first-party tenant
 00000002-0000-0ff1-ce00-000000000000 # Exchange Online (Office 365 Exchange Online) app ID
 00000003-0000-0ff1-ce00-000000000000 # SharePoint Online (Office 365 SharePoint Online) app ID
 aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee # documentation placeholder GUID used in examples
+bbbbbbbb-cccc-dddd-eeee-ffffffffffff # documentation placeholder GUID used in examples

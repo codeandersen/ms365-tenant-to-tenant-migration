@@ -14,6 +14,7 @@ This repository incorporates code adapted from the following upstream project.
 | -------------------------------------------- | ------------------------------------ | ------- |
 | `tools/Test-ModuleHealth.ps1`                | `tools/Test-ModuleHealth.ps1`        | adapted |
 | `tools/Get-MigrationReport.ps1`              | `tools/Get-MigrationReport.ps1`      | adapted |
+| `copy-options/A-Microsoft-native/New-TargetMailUsers.ps1` | `03-Identities/New-TargetMailUsers.ps1` | adapted |
 
 Each adapted file carries a header noting the adaptation and a short list of
 the changes made.

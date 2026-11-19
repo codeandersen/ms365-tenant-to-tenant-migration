@@ -37,3 +37,17 @@ Describe 'New-OutputFolder' {
         (Split-Path -Leaf $path) | Should -Match '^\d{8}-\d{6}$'
     }
 }
+
+Describe 'ConvertFrom-OpenIdIssuer' {
+    It 'extracts the GUID from a standard issuer' {
+        ConvertFrom-OpenIdIssuer -Issuer 'https://login.microsoftonline.com/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/v2.0' |
+            Should -Be 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+    }
+    It 'extracts the GUID from an sts issuer' {
+        ConvertFrom-OpenIdIssuer -Issuer 'https://sts.windows.net/bbbbbbbb-cccc-dddd-eeee-ffffffffffff/' |
+            Should -Be 'bbbbbbbb-cccc-dddd-eeee-ffffffffffff'
+    }
+    It 'throws when no GUID is present' {
+        { ConvertFrom-OpenIdIssuer -Issuer 'https://login.microsoftonline.com/common/v2.0' } | Should -Throw
+    }
+}

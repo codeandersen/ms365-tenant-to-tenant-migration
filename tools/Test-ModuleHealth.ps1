@@ -2,7 +2,11 @@
 # Changes:
 #   - Removed the ShareGate module check (no ShareGate copy path in this playbook).
 #   - Added checks for CrossTenantIdentityMapping (CTIM, prerelease) and
-#     Microsoft.Graph.Beta.Migrations (Orchestrator cmdlets).
+#     Microsoft.Graph.Beta.Migrations (Orchestrator cmdlets), plus the Orchestrator tenant-config
+#     prerequisites Microsoft.Graph.Applications, Microsoft.Graph.Identity.DirectoryManagement and
+#     Microsoft.Graph.Beta.Authentication (>= 2.33.0, aligned with Microsoft.Graph).
+#   - Optional -CrossTenantMigrationModulePath: the CrossTenantMigration NuGet module is not on
+#     PSGallery; when given, checks that it imports.
 #   - Added a minimum-version table (see $MinimumVersions below).
 <#
 .SYNOPSIS
@@ -30,14 +34,25 @@
       Microsoft.Online.SharePoint.PowerShell         16.0.27814.12015
       PnP.PowerShell                                 3.5.0
       MicrosoftTeams                                 8.0.0
+      Microsoft.Graph.Applications                   2.41.2
+      Microsoft.Graph.Identity.DirectoryManagement   2.41.2
+      Microsoft.Graph.Beta.Authentication            2.33.0 (doc minimum: Graph.Beta >= 2.33.0,
+                                                       same version as Microsoft.Graph)
       Microsoft.Graph.Beta.Migrations                2.41.2
       CrossTenantIdentityMapping                     0.0.34-Preview36668934 (prerelease:
                                                        Install-Module CrossTenantIdentityMapping -AllowPrerelease)
+      CrossTenantMigration (NuGet package)           not on PSGallery - download from Microsoft
+                                                       Learn and Import-Module the expanded
+                                                       folder; -ModulePath checks it imports
 
 .PARAMETER Fix
     Install-Module every mismatched Microsoft.Graph.* submodule at the newest Microsoft.Graph.Authentication version
     (-Scope CurrentUser -Force -AllowClobber). Asks before each one; supports -WhatIf. Close every PowerShell window
     afterwards and open a fresh one.
+
+.PARAMETER CrossTenantMigrationModulePath
+    Optional path to the expanded CrossTenantMigration NuGet module (e.g. .\CTModule\CrossTenantMigration)
+    used by 02-TenantPrep MigrationApps. When given, the check imports it and reports the result.
 
 .PARAMETER OutFile
     Optional CSV path for the result table.
@@ -58,6 +73,7 @@
 [CmdletBinding(SupportsShouldProcess)]
 param(
     [switch]$Fix,
+    [string]$CrossTenantMigrationModulePath,
     [string]$OutFile
 )
 
@@ -83,21 +99,26 @@ Add-Check 'PowerShell' 'Edition' 'PASS' "$edition. This playbook is developed an
 # Values are the PSGallery versions current when this file was written (verified with Find-Module 2026).
 # CrossTenantIdentityMapping ships as a prerelease only - find/install it with -AllowPrerelease.
 $MinimumVersions = [ordered]@{
-    'ExchangeOnlineManagement'                  = '3.11.1'
-    'Microsoft.Graph.Authentication'            = '2.41.2'
-    'Microsoft.Online.SharePoint.PowerShell'    = '16.0.27814.12015'
-    'PnP.PowerShell'                            = '3.5.0'
-    'MicrosoftTeams'                            = '8.0.0'
-    'Microsoft.Graph.Beta.Migrations'           = '2.41.2'                    # Orchestrator cmdlets (New-/Get-/Test-MgBetaCrossTenantMigrationJob etc.)
-    'CrossTenantIdentityMapping'                = '0.0.34-Preview36668934'    # CTIM cmdlets - prerelease only, needs -AllowPrerelease
+    'ExchangeOnlineManagement'                       = '3.11.1'
+    'Microsoft.Graph.Authentication'                 = '2.41.2'
+    'Microsoft.Graph.Applications'                   = '2.41.2'
+    'Microsoft.Graph.Identity.DirectoryManagement'   = '2.41.2'
+    'Microsoft.Graph.Beta.Authentication'            = '2.33.0'    # doc minimum for Graph.Beta; must match Microsoft.Graph version
+    'Microsoft.Online.SharePoint.PowerShell'         = '16.0.27814.12015'
+    'PnP.PowerShell'                                 = '3.5.0'
+    'MicrosoftTeams'                                 = '8.0.0'
+    'Microsoft.Graph.Beta.Migrations'                = '2.41.2'                    # Orchestrator cmdlets (New-/Get-/Test-MgBetaCrossTenantMigrationJob etc.)
+    'CrossTenantIdentityMapping'                     = '0.0.34-Preview36668934'    # CTIM cmdlets - prerelease only, needs -AllowPrerelease
 }
 $moduleUse = [ordered]@{
-    'ExchangeOnlineManagement'                  = 'Tenant prep, identities, mail config, domain cutover'
-    'Microsoft.Online.SharePoint.PowerShell'    = 'SharePoint/OneDrive phases'
-    'PnP.PowerShell'                            = 'Optional: SharePoint content handling'
-    'MicrosoftTeams'                            = 'Teams phone / voice inventory and recreation'
-    'Microsoft.Graph.Beta.Migrations'           = 'Orchestrator migration jobs (04, 05)'
-    'CrossTenantIdentityMapping'                = 'CTIM identity mapping (03-Identities)'
+    'ExchangeOnlineManagement'                       = 'Tenant prep, identities, mail config, domain cutover'
+    'Microsoft.Graph.Applications'                   = 'Prereq for the CrossTenantMigration tenant-config module'
+    'Microsoft.Graph.Identity.DirectoryManagement'   = 'Prereq for the CrossTenantMigration tenant-config module'
+    'Microsoft.Online.SharePoint.PowerShell'         = 'SharePoint/OneDrive phases'
+    'PnP.PowerShell'                                 = 'Optional: SharePoint content handling'
+    'MicrosoftTeams'                                 = 'Teams federation prep + phone/voice inventory'
+    'Microsoft.Graph.Beta.Migrations'                = 'Orchestrator migration jobs (05-Batches)'
+    'CrossTenantIdentityMapping'                     = 'CTIM identity mapping (03-Identities)'
 }
 
 # ------------------------------------------------------------ Microsoft Graph
@@ -153,6 +174,23 @@ foreach ($n in $moduleUse.Keys) {
         Add-Check 'Modules' $n 'WARN' "Installed $top is below minimum $min. Update-Module $n -Scope CurrentUser"
     }
     else { Add-Check 'Modules' $n 'PASS' "Installed: $($v -join ', ')$(if ($min) { " (minimum $min)" })" }
+}
+
+# ------------------------------------------------------------ CrossTenantMigration NuGet module (02-TenantPrep MigrationApps)
+if ($CrossTenantMigrationModulePath) {
+    if (-not (Test-Path $CrossTenantMigrationModulePath)) {
+        Add-Check 'Modules' 'CrossTenantMigration' 'WARN' "Path not found: $CrossTenantMigrationModulePath. Download the .nupkg from Microsoft Learn and Expand-Archive it first."
+    }
+    else {
+        try {
+            $m = Import-Module $CrossTenantMigrationModulePath -Force -PassThru -ErrorAction Stop
+            Add-Check 'Modules' 'CrossTenantMigration' 'PASS' "Imported $($m.Name) $($m.Version) from $CrossTenantMigrationModulePath"
+        }
+        catch { Add-Check 'Modules' 'CrossTenantMigration' 'WARN' "Found at $CrossTenantMigrationModulePath but failed to import: $($_.Exception.Message)" }
+    }
+}
+else {
+    Add-Check 'Modules' 'CrossTenantMigration' 'PASS' 'Skipped - pass -CrossTenantMigrationModulePath to verify the expanded NuGet module imports (needed only for 02-TenantPrep -Step MigrationApps).'
 }
 
 # ------------------------------------------------------------ what this window has already loaded
