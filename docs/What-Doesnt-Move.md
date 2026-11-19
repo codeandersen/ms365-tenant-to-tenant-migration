@@ -33,6 +33,10 @@ Learn pages referenced:
 | Sensitivity labels / protection on items | Re-apply in target | [Learn](.../cross-tenant-mailbox-migration) |
 | Teams calendar entries stored in the source mailbox | Meetings move via the Meeting workload; the source-side Teams calendar stops working | [Learn](.../migration-orchestrator-7-end-user-exp) |
 | More than 12 auxiliary archives per mailbox — **blocked** | Reduce archives first | [Learn](.../cross-tenant-mailbox-migration) |
+| Archive GUID not stamped on the target object — the move doesn't proceed | CTIM `ArchiveGUID` mapping (03); `06` stamps it for shared mailboxes | [Learn](.../cross-tenant-mailbox-migration) |
+| Auto-expanding archive that creates a new aux archive mid-move — the move **fails** | Submit well ahead of cutover; remove from batch and resubmit if it expands | [Learn](.../cross-tenant-mailbox-migration) |
+| Disabled/demoted archive on the mailbox — the move **fails** | `Set-Mailbox -RemoveDisabledArchive`, or re-enable and update ArchiveGuid on the target MailUser | [Learn](.../cross-tenant-mailbox-migration) |
+| Archive larger than the target archive quota — the move **fails** | Check target quota before the batch (readiness report §2) | [Learn](.../cross-tenant-mailbox-migration) |
 | Microsoft 365 group mailboxes | MRS doesn't support them; no Microsoft tool | [Learn](.../cross-tenant-mailbox-migration) |
 
 ### OneDrive (as part of an Orchestrator batch)
@@ -106,7 +110,7 @@ These mailboxes are **not in Orchestrator scope** — they move via
 | Room booking policies and calendar-processing settings (`Set-CalendarProcessing`) | Re-apply in target | [Playbook assumption — verify in pilot] |
 | Meetings organised by room/equipment mailboxes (Teams links not updated) | Recreate room meetings | [Learn](.../migration-orchestrator-7-end-user-exp) |
 | Licence question: Learn's licence text covers "source recipient or target recipient" — whether shared/resource mailboxes consume a Cross-Tenant User Data Migration licence is **not explicit** | Budget one per moved shared mailbox; confirm with Microsoft (docs/Questions-For-Microsoft.md) | [Playbook assumption] |
-| Shared mailboxes over 50 GB, with archive, or on Litigation Hold need an Exchange licence in the target | Counted by the readiness report | [General Exchange Online licensing] |
+| Shared mailboxes over 50 GB need Plan 2; an archive or Litigation Hold needs Plan 2 or Plan 1 + Exchange Online Archiving in the target | Counted per mailbox by the readiness report | [Learn](https://learn.microsoft.com/en-us/microsoft-365/admin/email/about-shared-mailboxes) |
 | Microsoft 365 Groups (group mailbox) | Not supported by MRS — no Microsoft tool | [Learn](.../cross-tenant-mailbox-migration) |
 
 ## 3. Microsoft Teams teams (teams and channels — not 1:1/group chats)

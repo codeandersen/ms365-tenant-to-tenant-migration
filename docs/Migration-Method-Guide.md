@@ -31,7 +31,8 @@ Learn pages:
 
 - **Moves:** a mailbox's user-visible content + Recoverable Items between tenants. [Learn](.../cross-tenant-mailbox-migration)
 - **Licence:** Cross-Tenant User Data Migration per moved mailbox (source or target recipient). For shared/resource mailboxes the licence requirement is not explicit — budget one per mailbox and confirm with Microsoft.
-- **Prerequisites:** target MailUsers/mailboxes stamped with the source ExchangeGuid and x500 addresses; source mailbox not on hold; max 12 auxiliary archives. Playbook 06 automates the stamping.
+- **Prerequisites:** target MailUsers/mailboxes stamped with the source ExchangeGuid, x500 addresses and **ArchiveGuid** (when the source is archive-enabled); source mailbox not on hold; max 12 auxiliary archives. Playbook 06 automates the stamping. [Learn](.../cross-tenant-mailbox-migration)
+- **Archives:** archive mailboxes and aux archives are supported. Watch for: auto-expanding archives creating a new aux archive mid-move (fails — submit early), a disabled/demoted archive on the mailbox (fails — remove or re-enable first), and archives larger than the target quota (fails). [Learn](.../cross-tenant-mailbox-migration)
 - **Limits:** public folders, M365 group mailboxes, Outbox, signatures and publicDelegates don't move; only store permissions survive on shared mailboxes. [Learn](.../cross-tenant-mailbox-migration)
 - **Use when:** shared, room and equipment mailboxes — or any mailbox you want to move *without* the Orchestrator pipeline. Playbook 06.
 
@@ -57,7 +58,8 @@ Learn pages:
 | Workload | Tool | Notes / playbook phase |
 |---|---|---|
 | User mailbox | Orchestrator | 03 + 05; ≤100 per batch |
-| User archive | Orchestrator (with the mailbox) | aux archives ≤12 for MRS path [Learn] |
+| User archive | Orchestrator (with the mailbox) | inferred — Orchestrator doesn't state it; CTIM ArchiveGUID requirement implies it; confirm in pilot. Aux archives ≤12, auto-expanding and disabled archives can fail the move [Learn] |
+| Shared/resource mailbox archive | Cross-tenant mailbox migration (with the mailbox) | ArchiveGuid must be stamped (06); needs Plan 2 or Plan 1 + EOA in target [Learn] |
 | Shared / room / equipment mailbox | Cross-tenant mailbox migration | 06; permissions re-applied after |
 | OneDrive of a migrating user | Orchestrator | moves with the user |
 | OneDrive without a user mailbox | Cross-tenant OneDrive migration | standalone; needs a source mailbox for CTIM [Learn] |
@@ -75,4 +77,4 @@ Learn pages:
 - **Cross-Tenant Shared Data Migration** = ceil(total non-personal SharePoint GB in scope / 100).
 - **Target user licences:** Exchange Online + Teams on both sides during the migration;
   OneDrive plan for every user whose OneDrive migrates. License only after CTIM write (03). [Learn](.../migration-orchestrator-1-overview)
-- **Shared mailboxes** need a licence only if >50 GB, archived, or on Litigation Hold. [General Exchange Online licensing]
+- **Shared mailboxes** need a licence when: >50 GB → **Exchange Online Plan 2**; archive or Litigation Hold → **Plan 2 or Plan 1 + Exchange Online Archiving**. [Learn](https://learn.microsoft.com/en-us/microsoft-365/admin/email/about-shared-mailboxes)

@@ -1,4 +1,4 @@
-BeforeAll {
+﻿BeforeAll {
     $script:Report = Join-Path $PSScriptRoot '..\00-Assessment\New-MigrationReadinessReport.ps1'
     $script:Fixture = Join-Path $PSScriptRoot 'fixtures\contoso-readiness'
 }
@@ -30,8 +30,8 @@ Describe 'New-MigrationReadinessReport' {
         $script:Md | Should -Match 'Cross-tenant OneDrive migration'
     }
 
-    It 'computes licence math (250.5 GB -> 3 Shared Data Migration licences, 5 user licences)' {
-        $script:Md | Should -Match 'Cross-Tenant User Data Migration\s*\|\s*5\s*\|'
+    It 'computes licence math (250.5 GB -> 3 Shared Data Migration licences, 8 user licences)' {
+        $script:Md | Should -Match 'Cross-Tenant User Data Migration\s*\|\s*8\s*\|'
         $script:Md | Should -Match 'Cross-Tenant Shared Data Migration\s*\|\s*3\s*\|'
     }
 
@@ -53,6 +53,39 @@ Describe 'New-MigrationReadinessReport' {
         $script:Md | Should -Match 'Bookings mailboxes \| 1'
         $script:Md | Should -Match 'Project Online sites.*\| 1'
         $script:Md | Should -Match 'Private / shared channels \| 2'
+    }
+
+    It 'has an archive-mailboxes section with a per-mailbox comes-along answer' {
+        $script:Md | Should -Match '## 2\. Archive mailboxes'
+        $script:Md | Should -Match 'Mailboxes with an archive/aux/disabled archive: \*\*6\*\*'
+        $script:Md | Should -Match 'anna@contoso\.com.*Yes \(Orchestrator - inferred, confirm in pilot\)'
+        $script:Md | Should -Match 'shared1@contoso\.com.*Yes - action needed'
+        $script:Md | Should -Match 'expand@contoso\.com.*Yes - action needed'
+        $script:Md | Should -Match 'aux@contoso\.com.*No - blocked'
+        $script:Md | Should -Match 'old@contoso\.com.*No - blocked'
+        # all-zero DisabledArchiveGuid (Get-Mailbox default) must not count as a disabled archive
+        $script:Md | Should -Match 'anna@contoso\.com.*Yes \(Orchestrator'
+        $script:Md | Should -Match 'disabled/demoted archives: \*\*1\*\*'
+    }
+
+    It 'feeds aux-over-12 and disabled archives into the blockers section' {
+        $script:Md | Should -Match 'Archive mailboxes that will fail the move - 2'
+    }
+
+    It 'states the precise shared-mailbox licence rule' {
+        $script:Md | Should -Match 'Plan 2 or Plan 1 \+ Exchange Online Archiving'
+    }
+
+    It 'marks archive details Unknown - not inventoried when the columns are missing' {
+        $inv2 = Join-Path $TestDrive 'old-inventory'
+        Copy-Item $script:Fixture $inv2 -Recurse
+        # strip the archive columns as an old inventory would have
+        $mbx = Import-Csv (Join-Path $inv2 'attachments\Mailboxes.csv')
+        $mbx | Select-Object UserPrincipalName, RecipientTypeDetails, PrimarySmtpAddress, TotalItemSizeGB, HasAnyHold, HoldReasons, LitigationHoldEnabled, ArchiveStatus, ProhibitSendReceiveQuota |
+            Export-Csv (Join-Path $inv2 'attachments\Mailboxes.csv') -NoTypeInformation -Encoding utf8
+        & $script:Report -InventoryPath $inv2 -OutFile (Join-Path $inv2 'R3.md')
+        $md3 = [System.IO.File]::ReadAllText((Join-Path $inv2 'R3.md'), [System.Text.Encoding]::UTF8)
+        $md3 | Should -Match 'Unknown - not inventoried'
     }
 
     It 'writes UTF-8 with BOM and keeps æøå readable' {

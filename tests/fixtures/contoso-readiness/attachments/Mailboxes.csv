@@ -1,5 +1,8 @@
-UserPrincipalName,RecipientTypeDetails,PrimarySmtpAddress,TotalItemSizeGB,HasAnyHold,HoldReasons,LitigationHoldEnabled,ArchiveStatus,ProhibitSendReceiveQuota
-søren@contoso.com,UserMailbox,søren@contoso.com,12.5,True,LitigationHold,True,None,49.5 GB
-anna@contoso.com,UserMailbox,anna@contoso.com,3.2,False,,False,None,49.5 GB
-shared1@contoso.com,SharedMailbox,shared1@contoso.com,60.0,False,,False,Active,50 GB
-room1@contoso.com,RoomMailbox,room1@contoso.com,1.0,False,,False,None,50 GB
+UserPrincipalName,RecipientTypeDetails,PrimarySmtpAddress,TotalItemSizeGB,HasAnyHold,HoldReasons,LitigationHoldEnabled,ArchiveStatus,ArchiveGuid,AutoExpandingArchiveEnabled,DisabledArchiveGuid,ArchiveQuota,ArchiveWarningQuota,AuxArchiveCount,ProhibitSendReceiveQuota
+søren@contoso.com,UserMailbox,søren@contoso.com,12.5,True,LitigationHold,True,Active,a1,False,,100 GB,90 GB,1,49.5 GB
+anna@contoso.com,UserMailbox,anna@contoso.com,3.2,False,,False,Active,a2,False,00000000-0000-0000-0000-000000000000,100 GB,90 GB,0,49.5 GB
+aux@contoso.com,UserMailbox,aux@contoso.com,2.0,False,,False,Active,a3,False,,100 GB,90 GB,13,49.5 GB
+expand@contoso.com,UserMailbox,expand@contoso.com,5.0,False,,False,Active,a4,True,,Unlimited,Unlimited,3,49.5 GB
+old@contoso.com,UserMailbox,old@contoso.com,1.0,False,,False,Active,a5,False,dead-guid,100 GB,90 GB,0,49.5 GB
+shared1@contoso.com,SharedMailbox,shared1@contoso.com,60.0,False,,False,Active,a6,False,,100 GB,90 GB,0,50 GB
+room1@contoso.com,RoomMailbox,room1@contoso.com,1.0,False,,False,None,,False,,,,0,50 GB

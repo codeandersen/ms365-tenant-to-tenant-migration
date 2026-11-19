@@ -25,6 +25,8 @@ Ask these before estimating or promising anything. Grouped by phase.
   decision, and is preservation via eDiscovery export acceptable before release?
 - Distribution groups, mail contacts, dynamic groups to recreate? Any hidden groups?
 - Forwarding rules that must survive (service accounts, integrations)?
+- Are archives in use, and may auto-expanding archives be paused/left untouched during the
+  migration window? (A new aux archive created mid-move fails the move.)
 - Mail flow outside Exchange Online: on-prem relay, scanners, multifunction printers, contact
   forms, third-party filtering?
 

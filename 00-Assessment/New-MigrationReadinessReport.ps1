@@ -57,6 +57,12 @@ $RepoDocs       = 'https://github.com/codeandersen/ms365-tenant-to-tenant-migrat
 $attach = Join-Path $InventoryPath 'attachments'
 $notInventoried = [System.Collections.Generic.List[string]]::new()
 
+function Test-DisabledArchive($m) {
+    # Get-Mailbox returns the all-zero GUID when there is no disabled archive.
+    $d = "$($m.DisabledArchiveGuid)".Trim()
+    [bool]($d -and $d -notmatch '^0{8}-0{4}-0{4}-0{4}-0{12}$' -and $d -ne "$($m.ArchiveGuid)")
+}
+
 function Import-AttCsv {
     param([string]$Name, [string]$Base = $attach)
     $p = Join-Path $Base $Name
@@ -114,6 +120,7 @@ function Get-Top {
 # --- Load inventory -----------------------------------------------------------
 
 $mailboxes    = Import-AttCsv 'Mailboxes.csv'
+$mbxStats     = Import-AttCsv 'MailboxStatistics.csv'
 $oneDrives    = Import-AttCsv 'OneDrive.csv'
 $spSites      = Import-AttCsv 'SharePointSites.csv'
 $teams        = Import-AttCsv 'Teams.csv'
@@ -192,6 +199,7 @@ $null = $r.AppendLine('## 1. Summary')
 $null = $r.AppendLine('')
 $sumRows = @(
     [pscustomobject]@{ Workload = 'User mailboxes';              Count = $userMbx.Count;    'Size (GB)' = [math]::Round($userGB, 1) }
+    [pscustomobject]@{ Workload = 'Archive-enabled mailboxes';   Count = @($mailboxes | Where-Object { $_.ArchiveStatus -eq 'Active' }).Count; 'Size (GB)' = [math]::Round((Measure-GbSum $mbxStats 'ArchiveItemSizeGB'), 1) }
     [pscustomobject]@{ Workload = 'Shared/room/equipment mailboxes'; Count = $sharedMbx.Count; 'Size (GB)' = [math]::Round($sharedGB, 1) }
     [pscustomobject]@{ Workload = 'Public folder mailboxes';     Count = $pfMbx.Count;      'Size (GB)' = '' }
     [pscustomobject]@{ Workload = 'Bookings mailboxes';          Count = $bookings.Count;   'Size (GB)' = '' }
@@ -206,9 +214,103 @@ $sumRows = @(
 $null = $r.AppendLine((Format-Table $sumRows @('Workload', 'Count', 'Size (GB)')))
 $null = $r.AppendLine('')
 
-# 2. Recommended migration method ----------------------------------------------
+# 2. Archive mailboxes ----------------------------------------------------------
 
-$null = $r.AppendLine('## 2. Recommended migration method per workload')
+$archColsPresent = $mailboxes.Count -gt 0 -and
+    ($mailboxes[0].PSObject.Properties.Name -contains 'AutoExpandingArchiveEnabled') -and
+    ($mailboxes[0].PSObject.Properties.Name -contains 'AuxArchiveCount') -and
+    ($mailboxes[0].PSObject.Properties.Name -contains 'DisabledArchiveGuid')
+$archStatsMap = @{}
+foreach ($s in $mbxStats) { $archStatsMap[$s.UserPrincipalName] = $s }
+
+$archiveRows = [System.Collections.Generic.List[object]]::new()
+$archiveBlocked = [System.Collections.Generic.List[object]]::new()
+if ($mailboxes.Count -gt 0 -and $archColsPresent) {
+    foreach ($m in $mailboxes) {
+        $hasArch    = $m.ArchiveStatus -eq 'Active'
+        $autoExp    = $m.AutoExpandingArchiveEnabled -eq 'True'
+        $aux        = [int](ConvertTo-Num $m.AuxArchiveCount)
+        $disabled   = Test-DisabledArchive $m
+        if (-not ($hasArch -or $autoExp -or $aux -gt 0 -or $disabled)) { continue }
+        $st = $archStatsMap[$m.UserPrincipalName]
+        $archGB = if ($st) { ConvertTo-Num $st.ArchiveItemSizeGB } else { 0 }
+        $archItems = if ($st) { "$($st.ArchiveItemCount)" } else { '' }
+        $isShared = $m.RecipientTypeDetails -in 'SharedMailbox', 'RoomMailbox', 'EquipmentMailbox'
+        $path = if ($isShared) { 'Cross-tenant mailbox migration' } else { 'Orchestrator' }
+        $comes = 'Yes'
+        $reason = ''
+        if ($m.HasAnyHold -eq 'True') {
+            $comes = 'No - blocked'; $reason = 'On hold - see section 5 blockers'
+        } elseif ($aux -gt 12) {
+            $comes = 'No - blocked'; $reason = "$aux auxiliary archives > max 12"
+        } elseif ($disabled) {
+            $comes = 'No - blocked'; $reason = 'Disabled/demoted archive present - remove it (Set-Mailbox -RemoveDisabledArchive) or re-enable it and stamp ArchiveGuid on the target MailUser'
+        } elseif ($autoExp) {
+            $comes = 'Yes - action needed'
+            $reason = 'Auto-expanding archive - submit early and make sure it does not expand during the move (move fails if a new aux archive is created mid-move)'
+        } elseif ($isShared -and $hasArch) {
+            $comes = 'Yes - action needed'
+            $reason = 'Shared/resource mailbox archive - needs Exchange Online Plan 2 or Plan 1 + Exchange Online Archiving in the target'
+        } elseif ($aux -gt 0) {
+            $comes = 'Yes - action needed'
+            $reason = "$aux auxiliary archive(s) - all must be in scope when the batch starts (AuxArchiveNotFoundInTargetRecipient)"
+        } elseif ($archGB -ge 100) {
+            $comes = 'Yes - action needed'
+            $reason = "Archive is $archGB GB - verify the target archive quota (default is 100 GB without auto-expanding) [Playbook assumption]"
+        }
+        if ($comes -eq 'Yes' -and -not $isShared) { $comes = 'Yes (Orchestrator - inferred, confirm in pilot)' }
+        $row = [pscustomobject]@{
+            Mailbox        = $m.UserPrincipalName
+            Type           = $m.RecipientTypeDetails
+            'Archive GB'   = $archGB
+            Items          = $archItems
+            'Auto-expanding' = if ($autoExp) { 'Yes' } else { '' }
+            'Aux archives' = $aux
+            Path           = $path
+            'Comes along?' = $comes
+            Reason         = $reason
+        }
+        $archiveRows.Add($row)
+        if ($comes -like 'No*') { $archiveBlocked.Add($row) }
+    }
+}
+
+$null = $r.AppendLine('## 2. Archive mailboxes')
+$null = $r.AppendLine('')
+if (-not (Test-CsvPresent 'Mailboxes.csv') -or -not $archColsPresent) {
+    $null = $r.AppendLine('**Unknown - not inventoried.** The archive columns (AutoExpandingArchiveEnabled, DisabledArchiveGuid, ArchiveQuota, AuxArchiveCount) are not in this inventory - re-run Collect-TenantInventory.ps1.')
+    $notInventoried.Add('Archive details (AutoExpandingArchiveEnabled/DisabledArchiveGuid/AuxArchiveCount in Mailboxes.csv)')
+} else {
+    $byType = @($archiveRows | Group-Object Type | ForEach-Object { "$($_.Name): $($_.Count)" })
+    $archTotal = Measure-GbSum $archiveRows 'Archive GB'
+    $autoExpN = @($archiveRows | Where-Object { $_.'Auto-expanding' -eq 'Yes' }).Count
+    $auxN = @($archiveRows | Where-Object { $_.'Aux archives' -gt 0 }).Count
+    $disN = @($mailboxes | Where-Object { Test-DisabledArchive $_ }).Count
+    $null = $r.AppendLine("- Mailboxes with an archive/aux/disabled archive: **$($archiveRows.Count)** ($($byType -join ', ')) - $([math]::Round($archTotal,1)) GB total")
+    $null = $r.AppendLine("- Auto-expanding archives: **$autoExpN** - mailboxes with auxiliary archives: **$auxN** - disabled/demoted archives: **$disN**")
+    $null = $r.AppendLine("- ArchiveGUID must be stamped on the target object when the source is archive-enabled, or the move does not proceed. [Learn]($LearnMailbox)")
+    $null = $r.AppendLine('')
+    $toShow = @($archiveRows | Sort-Object { -(ConvertTo-Num $_.'Archive GB') })
+    $cutNote = ''
+    if ($toShow.Count -gt 20) {
+        $blockedSet = @{}; foreach ($b in $archiveBlocked) { $blockedSet[$b.Mailbox] = $true }
+        $top20 = @($toShow | Select-Object -First 20)
+        $rest = @($archiveBlocked | Where-Object { -not $blockedSet.ContainsKey($_.Mailbox) -or $top20.Mailbox -notcontains $_.Mailbox })
+        $rest = @($archiveBlocked | Where-Object { $top20.Mailbox -notcontains $_.Mailbox })
+        $toShow = @($top20) + @($rest)
+        $cutNote = "_Showing the 20 largest archives plus every blocked mailbox ($($archiveRows.Count) total)._`n`n"
+    }
+    if ($toShow.Count -gt 0) {
+        $null = $r.AppendLine($cutNote + (Format-Table $toShow @('Mailbox','Type','Archive GB','Items','Auto-expanding','Aux archives','Path','Comes along?','Reason')))
+    } else {
+        $null = $r.AppendLine('_No archive mailboxes found._')
+    }
+}
+$null = $r.AppendLine('')
+
+# 3. Recommended migration method ----------------------------------------------
+
+$null = $r.AppendLine('## 3. Recommended migration method per workload')
 $null = $r.AppendLine('')
 $methodRows = @(
     [pscustomobject]@{
@@ -271,7 +373,7 @@ $null = $r.AppendLine('')
 
 # 3. Licences -------------------------------------------------------------------
 
-$null = $r.AppendLine('## 3. Licences')
+$null = $r.AppendLine('## 4. Licences')
 $null = $r.AppendLine('')
 $ctUserLic = $userMbx.Count + $sharedMbx.Count + $standaloneOd.Count
 $sharedDataLic = if ($spGB -gt 0) { [math]::Ceiling($spGB / 100) } else { 0 }
@@ -318,12 +420,17 @@ if ($servicePlans.Count -gt 0 -and $users.Count -gt 0) {
     $notInventoried.Add('Per-user service plans (LicenseServicePlans.csv or AssignedLicenses)')
 }
 
-# Shared mailboxes needing a licence: >50 GB, archive, or litigation hold [General Exchange Online licensing]
+# Shared mailboxes needing a licence: Plan 2 for >50 GB; Plan 2 or Plan 1 + EOA for archive/Litigation Hold
+$sharedLicUrl = 'https://learn.microsoft.com/en-us/microsoft-365/admin/email/about-shared-mailboxes'
 $sharedNeedLic = @($sharedMbx | Where-Object {
     (ConvertTo-Num $_.TotalItemSizeGB) -gt 50 -or $_.ArchiveStatus -eq 'Active' -or $_.LitigationHoldEnabled -eq 'True'
 })
 if ($sharedNeedLic.Count -gt 0) {
-    $null = $r.AppendLine("- **$($sharedNeedLic.Count) shared/resource mailboxes need an Exchange licence** (>50 GB, active archive, or Litigation Hold) [General Exchange Online licensing]: " + (($sharedNeedLic | Select-Object -First 10 | ForEach-Object PrimarySmtpAddress) -join ', '))
+    $null = $r.AppendLine("- **$($sharedNeedLic.Count) shared/resource mailboxes need an Exchange licence** [Learn]($sharedLicUrl): " + (($sharedNeedLic | Select-Object -First 10 | ForEach-Object PrimarySmtpAddress) -join ', '))
+    $over50  = @($sharedNeedLic | Where-Object { (ConvertTo-Num $_.TotalItemSizeGB) -gt 50 })
+    $archOrHold = @($sharedNeedLic | Where-Object { $_.ArchiveStatus -eq 'Active' -or $_.LitigationHoldEnabled -eq 'True' })
+    if ($over50.Count -gt 0)     { $null = $r.AppendLine("  - $($over50.Count) over 50 GB - **Exchange Online Plan 2**") }
+    if ($archOrHold.Count -gt 0) { $null = $r.AppendLine("  - $($archOrHold.Count) with an archive or Litigation Hold - **Plan 2 or Plan 1 + Exchange Online Archiving**") }
 }
 $null = $r.AppendLine('')
 
@@ -342,7 +449,7 @@ if ($target -and $target.Licenses.Count -gt 0) {
 
 # 4. Blockers --------------------------------------------------------------------
 
-$null = $r.AppendLine('## 4. Must be addressed before migration (blockers)')
+$null = $r.AppendLine('## 5. Must be addressed before migration (blockers)')
 $null = $r.AppendLine('')
 
 function Add-Blocker {
@@ -368,6 +475,16 @@ Add-Blocker 'Mailboxes on hold' $heldMbx.Count `
 
 if (-not (Test-CsvPresent 'Mailboxes.csv')) { $notInventoried.Add('Mailbox holds (Mailboxes.csv)') }
 $notInventoried.Add('OneDrive holds - holds block OneDrive moves too but are not collected per site; check them before the move')
+
+# Archive blockers from section 2 (aux > 12, disabled archive). Held archive
+# mailboxes are already covered by 'Mailboxes on hold' above - not double-listed.
+$archNonHoldBlocked = @($archiveBlocked | Where-Object { $_.Reason -notmatch 'On hold' })
+if ($archNonHoldBlocked.Count -gt 0) {
+    Add-Blocker 'Archive mailboxes that will fail the move' $archNonHoldBlocked.Count `
+        "Auxiliary archives over 12, or a disabled/demoted archive on the mailbox, make the move fail. [Learn]($LearnMailbox)" `
+        'Fix per mailbox (see section 2): reduce aux archives, or remove/re-enable the disabled archive and stamp ArchiveGuid on the target MailUser.' `
+        $archNonHoldBlocked 'Mailbox' 'Reason'
+}
 
 Add-Blocker 'Customer Key enabled' $customerKey.Count `
     "Customer Key on the source blocks cross-tenant OneDrive/SharePoint moves. [Learn]($LearnOneDrive)" `
@@ -398,8 +515,8 @@ if ($mailboxes.Count -gt 0 -and ($mailboxes[0].PSObject.Properties.Name -contain
     $notInventoried.Add('Mailbox quota usage (ProhibitSendReceiveQuota/TotalItemSizeGB)')
 }
 
-# aux archives: not in the inventory
-$notInventoried.Add('Auxiliary archive count per mailbox (cross-tenant mailbox migration supports max 12)')
+# aux archives: only "not inventoried" when the column was not collected
+if (-not $archColsPresent) { $notInventoried.Add('Auxiliary archive count per mailbox (cross-tenant mailbox migration supports max 12)') }
 
 $synced = @($users | Where-Object { $_.OnPremisesSyncEnabled -eq 'True' })
 Add-Blocker 'Directory-synced users (hybrid)' $synced.Count `
@@ -466,7 +583,7 @@ if ($target) {
 
 # 5. Decisions / rebuild ------------------------------------------------------------
 
-$null = $r.AppendLine('## 5. Needs a decision or rebuild (not migrated by Microsoft tools)')
+$null = $r.AppendLine('## 6. Needs a decision or rebuild (not migrated by Microsoft tools)')
 $null = $r.AppendLine('')
 $decRows = [System.Collections.Generic.List[object]]::new()
 function Add-Decision { param([string]$Item, [int]$Count, [string]$Note)
@@ -527,7 +644,7 @@ $null = $r.AppendLine('')
 
 # 6. Not inventoried ----------------------------------------------------------------
 
-$null = $r.AppendLine('## 6. Not inventoried')
+$null = $r.AppendLine('## 7. Not inventoried')
 $null = $r.AppendLine('')
 $null = $r.AppendLine('The report cannot see the following - check them manually or add them to the customer questions ([docs/Customer-Questions.md]($RepoDocs/Customer-Questions.md)):')
 $null = $r.AppendLine('')

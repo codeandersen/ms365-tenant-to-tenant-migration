@@ -898,9 +898,21 @@ function Invoke-Exchange {
         'LitigationHoldEnabled','InPlaceHolds','ComplianceTagHoldApplied','RetentionHoldEnabled','DelayHoldApplied',
         'ForwardingSmtpAddress','ForwardingAddress','DeliverToMailboxAndForward',
         'HiddenFromAddressListsEnabled','RetentionPolicy','WhenCreated','ProhibitSendReceiveQuota','UserPrincipalName',
-        'GrantSendOnBehalfTo','DisplayName','Alias','ExchangeGuid')
+        'GrantSendOnBehalfTo','DisplayName','Alias','ExchangeGuid',
+        'AutoExpandingArchiveEnabled','DisabledArchiveGuid','ArchiveQuota','ArchiveWarningQuota')
     Write-Log "Fetching all mailboxes (may take a while)..."
     $mailboxes = Get-EXOMailbox -ResultSize Unlimited -Properties $mbxProps
+
+    # If DisabledArchiveGuid is not returned by Get-EXOMailbox, fall back to a single
+    # Get-Mailbox pass (read-only) so the readiness report can spot demoted archives.
+    $disabledArchiveMap = @{}
+    if ($mailboxes.Count -gt 0 -and -not ($mailboxes[0].PSObject.Properties.Name -contains 'DisabledArchiveGuid')) {
+        Write-Log "DisabledArchiveGuid not returned by Get-EXOMailbox - falling back to Get-Mailbox." -Level WARN
+        try {
+            Get-Mailbox -ResultSize Unlimited -ErrorAction Stop |
+                ForEach-Object { if ($_.DisabledArchiveGuid -and "$($_.DisabledArchiveGuid)" -notmatch '^0{8}-') { $disabledArchiveMap[[string]$_.ExchangeGuid] = [string]$_.DisabledArchiveGuid } }
+        } catch { Write-Log "Get-Mailbox DisabledArchiveGuid fallback failed: $($_.Exception.Message)" -Level WARN }
+    }
     $script:Summary.metrics.holdsUnknown = $false
     # DelayReleaseHoldApplied is not supported by Get-EXOMailbox -Properties; fetched via Get-Mailbox for all
     $delayRelease = @{}
@@ -911,6 +923,7 @@ function Invoke-Exchange {
 
     $stats = @{}
     $statRows = [System.Collections.Generic.List[object]]::new()
+    $auxWarnLogged = $false
     $i = 0
     foreach ($m in $mailboxes) {
         $i++
@@ -927,6 +940,7 @@ function Invoke-Exchange {
                 LastUserActionTime   = $s.LastUserActionTime
                 ArchiveItemSizeGB    = $null
                 ArchiveItemCount     = $null
+                AuxArchiveCount      = $null
             }
             if ($m.ArchiveStatus -eq 'Active') {
                 try {
@@ -935,12 +949,27 @@ function Invoke-Exchange {
                     $row.ArchiveItemCount = $a.ItemCount
                 } catch {}
             }
+            if ($m.ArchiveStatus -eq 'Active' -or $m.AutoExpandingArchiveEnabled) {
+                try {
+                    $loc = @(Get-MailboxLocation -Identity $m.ExchangeGuid.Guid -MailboxLocationType AuxArchive -ErrorAction Stop)
+                    $row.AuxArchiveCount = $loc.Count
+                } catch {
+                    $row.AuxArchiveCount = $null
+                    if (-not $auxWarnLogged) {
+                        Write-Log "Get-MailboxLocation AuxArchive failed (counting disabled): $($_.Exception.Message)" -Level WARN
+                        $auxWarnLogged = $true
+                    }
+                }
+            }
             $statRows.Add([pscustomobject]$row)
         } catch {
             Write-Log "Statistics failed for $($m.UserPrincipalName): $($_.Exception.Message)" -Level WARN
         }
     }
     Export-CsvSafe -Data $statRows.ToArray() -Name 'MailboxStatistics.csv'
+
+    $statAux = @{}
+    foreach ($sr in $statRows) { $statAux[$sr.UserPrincipalName] = $sr.AuxArchiveCount }
 
     $mbxRows = foreach ($m in $mailboxes) {
         $holdReasons = [System.Collections.Generic.List[string]]::new()
@@ -961,6 +990,11 @@ function Invoke-Exchange {
             TotalItemSizeGB           = $sizeGB
             ArchiveStatus             = "$($m.ArchiveStatus)"
             ArchiveGuid               = $m.ArchiveGuid
+            AutoExpandingArchiveEnabled = [bool]$m.AutoExpandingArchiveEnabled
+            DisabledArchiveGuid       = if ($m.PSObject.Properties.Name -contains 'DisabledArchiveGuid') { "$($m.DisabledArchiveGuid)" } else { "$($disabledArchiveMap[[string]$m.ExchangeGuid])" }
+            ArchiveQuota              = "$($m.ArchiveQuota)"
+            ArchiveWarningQuota       = "$($m.ArchiveWarningQuota)"
+            AuxArchiveCount           = $statAux[$m.UserPrincipalName]
             HasAnyHold                = ($holdReasons.Count -gt 0)
             HoldReasons               = ($holdReasons -join '; ')
             LitigationHoldEnabled     = $m.LitigationHoldEnabled
@@ -1069,6 +1103,7 @@ function Invoke-Exchange {
     try {
         $orgConfig = Get-OrganizationConfig -ErrorAction Stop
         $script:Summary.metrics.publicFoldersEnabled = [bool]$orgConfig.PublicFoldersEnabled
+        $script:Summary.metrics.orgAutoExpandingArchive = [bool]$orgConfig.AutoExpandingArchiveEnabled
         $pfMbx = @(Get-Mailbox -PublicFolder -ErrorAction SilentlyContinue)
         if ($pfMbx) { Export-CsvSafe -Data @($pfMbx | Select-Object DisplayName, PrimarySmtpAddress) -Name 'PublicFolderMailboxes.csv' }
     } catch {}
@@ -1104,6 +1139,9 @@ function Invoke-Exchange {
     $script:Summary.metrics.totalMailboxGB = [math]::Round(($mbxRows | Measure-Object TotalItemSizeGB -Sum).Sum, 2)
     $script:Summary.metrics.totalArchiveGB = [math]::Round(($statRows | Measure-Object ArchiveItemSizeGB -Sum).Sum, 2)
     $script:Summary.metrics.archiveMailboxCount = @($mbxRows | Where-Object { $_.ArchiveStatus -eq 'Active' }).Count
+    $script:Summary.metrics.autoExpandingArchiveCount = @($mbxRows | Where-Object AutoExpandingArchiveEnabled).Count
+    $script:Summary.metrics.auxArchiveMailboxCount = @($mbxRows | Where-Object { $_.AuxArchiveCount -gt 0 }).Count
+    $script:Summary.metrics.disabledArchiveCount = @($mbxRows | Where-Object { $_.DisabledArchiveGuid -and $_.DisabledArchiveGuid -notmatch '^0{8}-0{4}-0{4}-0{4}-0{12}$' -and $_.DisabledArchiveGuid -ne "$($_.ArchiveGuid)" }).Count
     $script:Summary.metrics.mailboxesWithHolds = $holdRows.Count
     $script:Summary.metrics.mailboxesOver50GB  = @($mbxRows | Where-Object IsLarge50GB).Count
     $script:Summary.metrics.mailboxesOver100GB = @($mbxRows | Where-Object IsLarge100GB).Count
