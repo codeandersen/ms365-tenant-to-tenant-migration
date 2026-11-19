@@ -16,6 +16,6 @@ Adapted in structure from the Mezba toolkit's risk format. Score = probability x
 | R10 | SharePoint 4,000-queue saturation stalls site/OneDrive moves | 2 | 3 | 6 | `Start-SiteContentMoves -MaxConcurrent`; stagger waves | `<name>` |
 | R11 | Mail loops between tenants while domains are in transit | 2 | 3 | 6 | Keep source MailUsers + targetAddress until the domain fully moves; Test-TargetTenant `-CheckSource` | `<name>` |
 | R12 | Tenant closes with a hold still in place → data destruction | 1 | 5 | 5 | Decommission gate G16: retention decision is a documented business sign-off | `<name>` |
-| R13 | EA licence gate: cross-tenant licences unavailable to the customer's agreement | 2 | 5 | 10 | Confirm procurement at T-21 (gate G3) before building the plan on Orchestrator | `<name>` |
+| R13 | EA licence gate: cross-tenant licences unavailable to the customer's agreement | 2 | 5 | 10 | Confirm procurement at T-30 (gate G3) before building the plan on Orchestrator | `<name>` |
 | R14 | A `-WhatIf` was skipped and a change ran blind | 1 | 4 | 4 | Convention: `-WhatIf` first, always; per-object backups in 09 abort the run if they fail | `<name>` |
 | R15 | CTIM `-Overwrite` used without a downloaded mapping → unrecoverable | 1 | 5 | 5 | `Invoke-CtimMapping` forces the download to `customers/` before accepting `-Overwrite` | `<name>` |

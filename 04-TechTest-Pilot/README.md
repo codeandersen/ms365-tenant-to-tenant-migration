@@ -1,7 +1,11 @@
 # 04 — Technical test & pilot
 
 **Purpose.** Prove the migration end-to-end on a handful of users before the real waves,
-and pin down every behaviour the docs leave open. Nothing scales until this phase is green.
+and pin down every behaviour the docs leave open. Nothing scales until this phase is green —
+both runs happen **before** production identities are licensed or batched (roughly T-38…T-22 in
+the runbook). The technical test is also the only place the 09 domain/UPN order can be
+rehearsed: a domain can't be moved partially, so the hypothesis gets its dry run on the test
+tenant pair with a test domain.
 
 ## Two runs
 

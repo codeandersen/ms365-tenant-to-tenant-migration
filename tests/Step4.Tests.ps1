@@ -105,3 +105,36 @@ Describe 'Remove-MigrationArtifacts -AllBatchesTerminalConfirmed' {
             Should -Match "'Deleted'.*'PendingDelete'|'PendingDelete'.*'Deleted'"
     }
 }
+
+Describe 'Get-AddressMap' {
+    BeforeAll {
+        $script:ul = Join-Path $TestDrive 'users.csv'
+        @(
+            [pscustomobject]@{ SourceUpn = 'a@contoso.com'; SourcePrimarySmtp = 'a@contoso.com'; DisplayName = 'A'; FirstName = 'A'; LastName = 'N'; TargetUpn = 'a@fabrikam.onmicrosoft.com'; TargetPrimarySmtp = 'a@fabrikam.onmicrosoft.com'; UsageLocation = 'DK'; TargetLicenseSku = 'SPE_E5'; Batch = 'wave1'; CompleteAfterDateTimeUtc = '2026-09-05T22:00:00Z'; Workloads = 'Exchange' }
+            [pscustomobject]@{ SourceUpn = 'b@contoso.com'; SourcePrimarySmtp = 'b@contoso.com'; DisplayName = 'B'; FirstName = 'B'; LastName = 'N'; TargetUpn = 'b@fabrikam.onmicrosoft.com'; TargetPrimarySmtp = 'bsmtp@fabrikam.onmicrosoft.com'; UsageLocation = 'DK'; TargetLicenseSku = 'SPE_E5'; Batch = 'wave1'; CompleteAfterDateTimeUtc = '2026-09-05T22:00:00Z'; Workloads = 'Exchange' }
+        ) | Export-Csv $ul -NoTypeInformation
+    }
+    It 'maps SourcePrimarySmtp to TargetPrimarySmtp (validated by Import-MigrationUserList)' {
+        $m = Get-AddressMap -UserListPath $script:ul
+        $m.Map['a@contoso.com'] | Should -Be 'a@fabrikam.onmicrosoft.com'
+        $m.Map['b@contoso.com'] | Should -Be 'bsmtp@fabrikam.onmicrosoft.com'
+        $m.Duplicates.Count | Should -Be 0
+    }
+    It 'adds shared-mailbox mapping rows' {
+        $sm = Join-Path $TestDrive 'shared.csv'
+        @([pscustomobject]@{ SourcePrimarySmtp = 'info@contoso.com'; TargetPrimarySmtp = 'info@fabrikam.onmicrosoft.com'; Name = 'Info' }) | Export-Csv $sm -NoTypeInformation
+        $m = Get-AddressMap -UserListPath $script:ul -SharedMailboxMappingPath $sm
+        $m.Map.Count | Should -Be 3
+        $m.Map['info@contoso.com'] | Should -Be 'info@fabrikam.onmicrosoft.com'
+    }
+    It 'first source wins and duplicates are reported' {
+        $sm2 = Join-Path $TestDrive 'shared2.csv'
+        @([pscustomobject]@{ SourcePrimarySmtp = 'a@contoso.com'; TargetPrimarySmtp = 'other@fabrikam.onmicrosoft.com'; Name = 'X' }) | Export-Csv $sm2 -NoTypeInformation
+        $m = Get-AddressMap -UserListPath $script:ul -SharedMailboxMappingPath $sm2
+        $m.Map['a@contoso.com'] | Should -Be 'a@fabrikam.onmicrosoft.com'
+        $m.Duplicates | Should -Contain 'a@contoso.com'
+    }
+    It 'throws when the user list does not exist' {
+        { Get-AddressMap -UserListPath 'C:\nope\missing.csv' } | Should -Throw '*not found*'
+    }
+}

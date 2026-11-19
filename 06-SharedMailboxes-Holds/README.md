@@ -18,7 +18,8 @@ CTIM is not documented for stamping these objects, so the documented manual stam
 2. **Target MailUsers** (target, `-WhatIf`):
    `New-SharedMailboxMailUsers.ps1` - *this is the one place stamping ExchangeGuid/ArchiveGuid/x500
    is correct* (unlike `03-Identities/New-TargetMailUsers.ps1`, where CTIM owns those attributes).
-   Input: the export CSV + a mapping CSV (`SourcePrimarySmtp,TargetPrimarySmtp,Name`). Refuses
+   Input: the export CSV + a mapping CSV (`SourcePrimarySmtp,TargetPrimarySmtp,Name`, optional
+   `FinalPrimarySmtp` for the post-domain-move primary address). Refuses
    non-accepted target domains and identities that are already mailboxes.
 3. **Batch** (target, `-WhatIf`):
    `New-CrossTenantMailboxBatch.ps1` - builds the `EmailAddress`-column CSV and runs the documented

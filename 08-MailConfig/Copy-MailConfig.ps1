@@ -60,9 +60,11 @@
 .PARAMETER ExportFolder
     With -Import: the folder -Export wrote.
 
-.PARAMETER MappingFile
-    With -Import: CSV with Source and Destination columns, mapping each source mailbox address to its destination
-    identity (UPN or address). The same file New-TargetMailboxes users can build for SharePoint and Teams mapping.
+.PARAMETER UserListPath
+    With -Import: the 01-Design migration-users.csv (SourcePrimarySmtp -> TargetPrimarySmtp/TargetUpn).
+
+.PARAMETER SharedMailboxMappingPath
+    With -Import: optional 06 shared/resource-mailbox mapping CSV (SourcePrimarySmtp -> TargetPrimarySmtp).
 
 .PARAMETER AddressDomain
     With -Import: accepted domain in the destination for the primary address of new distribution lists, e.g. a
@@ -84,14 +86,14 @@
 
 .EXAMPLE
     .\Copy-MailConfig.ps1 -Import -TenantId <dest-guid> -AdminUpn admin@fabrikam.onmicrosoft.com -Customer contoso `
-        -ExportFolder .\customers\contoso\output\08-MailConfig\<stamp> -MappingFile .\UserMapping.csv -AddressDomain fabrikam.onmicrosoft.com -WhatIf
+        -ExportFolder .\customers\contoso\output\08-MailConfig\<stamp> -UserListPath .\customers\contoso\migration-users.csv -AddressDomain fabrikam.onmicrosoft.com -WhatIf
 
 .EXAMPLE
     .\Copy-MailConfig.ps1 -Export -TenantId <source-guid> -AdminUpn admin@contoso.com -Customer contoso -IncludeFolders Inbox, Contacts
 
 .EXAMPLE
     .\Copy-MailConfig.ps1 -Import -TenantId <dest-guid> -AdminUpn admin@fabrikam.onmicrosoft.com -Customer contoso `
-        -ExportFolder .\customers\contoso\output\08-MailConfig\<stamp> -MappingFile .\UserMapping.csv -AddressDomain fabrikam.onmicrosoft.com -Include FolderPermissions -WhatIf
+        -ExportFolder .\customers\contoso\output\08-MailConfig\<stamp> -UserListPath .\customers\contoso\migration-users.csv -SharedMailboxMappingPath .\customers\contoso\shared-mailbox-mapping.csv -AddressDomain fabrikam.onmicrosoft.com -Include FolderPermissions -WhatIf
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
@@ -127,7 +129,8 @@ param(
     [Parameter(ParameterSetName = 'Export')][switch]$SkipMailboxChecks,
 
     [Parameter(ParameterSetName = 'Import', Mandatory)][string]$ExportFolder,
-    [Parameter(ParameterSetName = 'Import', Mandatory)][string]$MappingFile,
+    [Parameter(ParameterSetName = 'Import', Mandatory)][string]$UserListPath,
+    [Parameter(ParameterSetName = 'Import')][string]$SharedMailboxMappingPath,
     [Parameter(ParameterSetName = 'Import', Mandatory)][string]$AddressDomain,
     [Parameter(ParameterSetName = 'Import')][string]$AliasPrefix = '',
     [Parameter(ParameterSetName = 'Import')][ValidateSet('Contacts', 'DistributionGroups', 'Permissions', 'FolderPermissions', 'Forwarding')]
@@ -348,11 +351,11 @@ foreach ($f in 'Permissions.csv', 'Forwarding.csv', 'DistributionGroups.csv', 'D
     if (-not (Test-Path (Join-Path $ExportFolder $f))) { throw "$f missing from $ExportFolder. Point -ExportFolder at the folder -Export wrote." }
 }
 
+Import-Module (Join-Path $PSScriptRoot '..\tools\Orchestrator.psm1') -Force
+$am = Get-AddressMap -UserListPath $UserListPath -SharedMailboxMappingPath $SharedMailboxMappingPath
+if ($am.Duplicates) { Write-Warning "Duplicate source rows ignored: $($am.Duplicates -join ', ')" }
 $map = @{}
-Import-Csv $MappingFile | ForEach-Object {
-    if (-not $_.Source -or -not $_.Destination) { throw "$MappingFile needs Source and Destination columns." }
-    $map[$_.Source.Trim().ToLower()] = $_.Destination.Trim()
-}
+foreach ($k in $am.Map.Keys) { $map[$k] = $am.Map[$k] }
 Write-Host "$($map.Count) mailbox mappings loaded." -ForegroundColor Cyan
 
 $log = [System.Collections.Generic.List[object]]::new()

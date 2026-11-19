@@ -566,6 +566,61 @@ function Test-MigratedUserState {
     [pscustomobject]@{ Pass = ($problems.Count -eq 0); Problems = @($problems) }
 }
 
+function Get-AddressMap {
+    <#
+    .SYNOPSIS
+        Builds the source -> destination recipient map used by the 08/09 scripts.
+
+    .DESCRIPTION
+        Replaces the upstream UserMapping.csv (Source,Destination). Rows come from:
+          - the 01-Design user list (Import-MigrationUserList): SourcePrimarySmtp ->
+            TargetPrimarySmtp (TargetUpn as a defensive fallback; the import already requires
+            TargetPrimarySmtp).
+          - the optional 06 shared/resource-mailbox mapping CSV: SourcePrimarySmtp ->
+            TargetPrimarySmtp.
+        Keys are lowercased source addresses; values are destination identities (UPN or SMTP
+        address). Later rows do not overwrite earlier ones: first source wins, duplicates are
+        reported on the returned object's Duplicates list. Returns [pscustomobject] with Map
+        (ordered hashtable) and Duplicates (string[]).
+
+    .PARAMETER UserListPath
+        Path to the 01-Design migration-users.csv.
+
+    .PARAMETER SharedMailboxMappingPath
+        Optional 06 shared/resource-mailbox mapping CSV (SourcePrimarySmtp, TargetPrimarySmtp).
+
+    .EXAMPLE
+        $m = Get-AddressMap -UserListPath .\customers\contoso\migration-users.csv -SharedMailboxMappingPath .\customers\contoso\shared-mailbox-mapping.csv
+        $m.Map['alex@contoso.com']  # -> alex@fabrikam.onmicrosoft.com
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$UserListPath,
+        [string]$SharedMailboxMappingPath
+    )
+    if (-not (Test-Path $UserListPath)) { throw "User list $UserListPath not found." }
+    $map = [ordered]@{}
+    $dupes = [System.Collections.Generic.List[string]]::new()
+    foreach ($u in @(Import-MigrationUserList -Path $UserListPath)) {
+        $src = "$($u.SourcePrimarySmtp)".Trim().ToLower()
+        $dst = if ("$($u.TargetPrimarySmtp)".Trim()) { "$($u.TargetPrimarySmtp)".Trim() } else { "$($u.TargetUpn)".Trim() }
+        if (-not $src -or -not $dst) { continue }
+        if ($map.Contains($src)) { $dupes.Add($src); continue }
+        $map[$src] = $dst
+    }
+    if ($SharedMailboxMappingPath) {
+        if (-not (Test-Path $SharedMailboxMappingPath)) { throw "Shared-mailbox mapping $SharedMailboxMappingPath not found." }
+        foreach ($m in @(Import-Csv $SharedMailboxMappingPath)) {
+            $src = "$($m.SourcePrimarySmtp)".Trim().ToLower()
+            $dst = "$($m.TargetPrimarySmtp)".Trim()
+            if (-not $src -or -not $dst) { continue }
+            if ($map.Contains($src)) { $dupes.Add($src); continue }
+            $map[$src] = $dst
+        }
+    }
+    [pscustomobject]@{ Map = $map; Duplicates = @($dupes) }
+}
+
 Export-ModuleMember -Function Import-MigrationUserList, ConvertTo-WorkloadList, Split-MigrationBatch,
     ConvertTo-CrossTenantMigrationJobBody, Test-ValidationFresh, Compare-MigrationIdentity, Select-LicensableUser, Get-GraphValue,
-    Resolve-PermissionTrustee, ConvertFrom-InPlaceHold, Test-MigratedUserState
+    Resolve-PermissionTrustee, ConvertFrom-InPlaceHold, Test-MigratedUserState, Get-AddressMap

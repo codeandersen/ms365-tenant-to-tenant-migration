@@ -79,6 +79,6 @@ This playbook was inspired by
 [Mezba Uddin](https://www.linkedin.com/in/mezbauddin/) and his
 [mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit](https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit).
 
-Parts of `tools/` are adapted from Mezba Uddin's
+Several scripts across the phases (03, 06, 08, 09, 10, 11, 12) are adapted from Mezba Uddin's
 [M365_Tenant_to_Tenant_Migration_Toolkit](https://github.com/mezbauddin/M365_Tenant_to_Tenant_Migration_Toolkit)
-(MIT). See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+(MIT). See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for the per-file list.

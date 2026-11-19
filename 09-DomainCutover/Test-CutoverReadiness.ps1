@@ -16,7 +16,8 @@
     Source:       deleted users holding the domain, synced users on it, Entra users with proxy addresses on it but
                   no mailbox (ProxyOnly), app registrations with identifier URIs on it.
     Snapshot:     it is the -pre one: it has addresses on the domain and LegacyExchangeDN values.
-    Mapping:      the file exists and every Destination resolves in the destination.
+    Mapping:      the address map (01 user list + optional 06 shared-mailbox mapping) builds and
+                  every destination resolves in the destination.
     Destination:  conflicts (old addresses already on guests, mail users, contacts or other mailboxes), domain state
                   (not added, unverified with the TXT to publish, verified), Conditional Access policies with
                   location conditions (your test sign-in from home may be blocked).
@@ -44,8 +45,11 @@
 .PARAMETER Domain
     The domains moving, e.g. contoso.com.
 
-.PARAMETER MappingFile
-    The mapping CSV (Source, Destination).
+.PARAMETER UserListPath
+    The 01-Design migration-users.csv (SourcePrimarySmtp -> TargetPrimarySmtp/TargetUpn).
+
+.PARAMETER SharedMailboxMappingPath
+    Optional 06 shared/resource-mailbox mapping CSV (SourcePrimarySmtp -> TargetPrimarySmtp).
 
 .PARAMETER SourceSnapshot
     The SourceRecipients-pre-<stamp>.csv from Remove-SourceDomain -SnapshotOnly. Take the snapshot first: at T-1 day
@@ -54,7 +58,7 @@
 .EXAMPLE
     .\Test-CutoverReadiness.ps1 -SourceTenantId <source-guid> -DestinationTenantId <destination-guid> `
         -SourceAdmin admin@contoso.onmicrosoft.com -DestinationAdmin admin@fabrikam.onmicrosoft.com `
-        -Domain contoso.com -MappingFile .\UserMapping.csv -SourceSnapshot .\SourceRecipients-pre-<stamp>.csv
+        -Domain contoso.com -UserListPath .\customers\contoso\migration-users.csv -SourceSnapshot .\SourceRecipients-pre-<stamp>.csv -Customer contoso
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
@@ -73,7 +77,8 @@ param(
     [Parameter(Mandatory)][string]$SourceAdmin,
     [Parameter(Mandatory)][string]$DestinationAdmin,
     [Parameter(Mandatory)][string[]]$Domain,
-    [Parameter(Mandatory)][string]$MappingFile,
+    [Parameter(Mandatory)][string]$UserListPath,
+    [string]$SharedMailboxMappingPath,
     [Parameter(Mandatory)][string]$SourceSnapshot,
     [Parameter(Mandatory)][string]$Customer,
     [switch]$BlockersOnly
@@ -131,8 +136,16 @@ else {
     else { Add-Result 'Snapshot' 'Snapshot is the -pre one' 'FAIL' "$withDomain rows hold the domain, $withLeg have LegacyExchangeDN" 'Take a new snapshot before any address is removed (Remove-SourceDomain -SnapshotOnly)' }
 }
 $mapRows = @()
-if (-not (Test-Path $MappingFile)) { Add-Result 'Mapping' 'Mapping file' 'FAIL' "$MappingFile not found" 'Build it with 02b-UserMapping' }
-else { $mapRows = @(Import-Csv $MappingFile | Where-Object { $_.Source -and $_.Destination }); Add-Result 'Mapping' 'Mapping file' 'INFO' "$($mapRows.Count) rows" }
+if (-not (Test-Path $UserListPath)) { Add-Result 'Mapping' 'User list' 'FAIL' "$UserListPath not found" 'Build it in 01-Design (migration-users.csv)' }
+else {
+    Import-Module (Join-Path $PSScriptRoot '..\tools\Orchestrator.psm1') -Force
+    try {
+        $am = Get-AddressMap -UserListPath $UserListPath -SharedMailboxMappingPath $SharedMailboxMappingPath
+        $mapRows = @($am.Map.GetEnumerator() | ForEach-Object { [pscustomobject]@{ Source = $_.Key; Destination = $_.Value } })
+        Add-Result 'Mapping' 'Address map' 'INFO' "$($mapRows.Count) rows from the 01 user list$(if ($SharedMailboxMappingPath) { ' + shared-mailbox mapping' })$(if ($am.Duplicates) { "; duplicates ignored: $($am.Duplicates -join ', ')" } else { '' })"
+    }
+    catch { Add-Result 'Mapping' 'Address map' 'FAIL' $_.Exception.Message 'Fix the 01 user list / 06 shared-mailbox mapping' }
+}
 
 # ------------------------------------------------------------ source
 Write-Host ''

@@ -6,19 +6,22 @@
 
 <#
 .SYNOPSIS
-    Cutover in the destination: gives every migrated recipient its old addresses back, adds X500 addresses so replies
-    to old mail don't bounce, and makes the old address primary for recipients in the plan file.
+    Cutover in the destination: gives every migrated recipient its old addresses back as aliases,
+    and adds X500 addresses so replies to old mail don't bounce. Aliases only - it never changes
+    a primary address.
 
 .DESCRIPTION
-    TL;DR: Run after Add-TargetDomain has verified the domains. For each row in your mapping file (Source,Destination)
-    and each list or contact Copy-MailConfig created, it adds the recipient's old addresses on the moved domains and
-    an X500 address built from its old LegacyExchangeDN. For recipients in TargetBuildPlan.csv it also makes the old
-    address primary. Everything else, for example people who already lived in the destination,
-    just gets the old addresses as aliases. Safe to re-run. Supports -WhatIf.
+    TL;DR: Run after Add-TargetDomain has verified the domains. For each source recipient in the
+    address map (the 01 user list plus the optional 06 shared/resource-mailbox mapping) and each
+    list or contact Copy-MailConfig created, it adds the recipient's old addresses on the moved
+    domains and an X500 address built from its old LegacyExchangeDN. Everything else, for example
+    people who already lived in the destination, just gets the old addresses as aliases. Safe to
+    re-run. Supports -WhatIf.
 
-    This script changes ADDRESSES ONLY. Sign-in names (UPNs) change exclusively via
-    Set-TargetUpn.ps1, which guards them behind the migration-batch Completed check - one owner
-    for UPN changes.
+    This script changes ADDRESSES ONLY - aliases and X500s, never the primary address.
+    Sign-in names (UPNs) and user primary addresses change exclusively via Set-TargetUpn.ps1,
+    which guards them behind the migration-batch Completed check; shared/resource-mailbox primary
+    addresses via Set-TargetPrimaryAddress.ps1. One owner per object type.
 
     Why X500: migrated mail, meeting invites and Outlook's autocomplete address people by their old internal Exchange
     address, not their email address. Without a matching X500 address, replying to an old message bounces with an
@@ -47,9 +50,11 @@
 .PARAMETER TenantId
     Destination tenant ID (GUID). Required.
 
-.PARAMETER MappingFile
-    CSV with Source and Destination columns: old address to destination recipient (UPN or address). Add rows for
-    Microsoft 365 groups and Teams too, e.g. sales@contoso.com -> sales@fabrikam.onmicrosoft.com.
+.PARAMETER UserListPath
+    The 01-Design migration-users.csv (SourcePrimarySmtp -> TargetPrimarySmtp/TargetUpn).
+
+.PARAMETER SharedMailboxMappingPath
+    Optional 06 shared/resource-mailbox mapping CSV (SourcePrimarySmtp -> TargetPrimarySmtp).
 
 .PARAMETER SourceSnapshot
     SourceRecipients-pre-<stamp>.csv from Remove-SourceDomain. Holds the old addresses and LegacyExchangeDN values.
@@ -58,12 +63,6 @@
 
 .PARAMETER Domain
     The domains that moved. Only addresses on these (and accepted in the destination) are added.
-
-.PARAMETER PlanFile
-    Optional CSV with SourceAddress and Include columns: recipients in it (Include True) get the old
-    address made primary as well. Build it from the 01-Design user list (SourcePrimarySmtp
-    renamed to SourceAddress, Include=True). Default .\TargetBuildPlan.csv; if missing, every recipient
-    gets aliases only (no primary changes).
 
 .PARAMETER AdminUpn
     Optional destination admin account. Open Exchange or Graph sessions for another account or tenant are
@@ -79,12 +78,12 @@
     Never touches mailboxes, mail users or contacts. Supports -WhatIf.
 
 .EXAMPLE
-    .\Switch-TargetAddresses.ps1 -TenantId <destination-guid> -MappingFile .\UserMapping.csv -SourceSnapshot .\SourceRecipients-pre-<stamp>.csv `
-        -Domain contoso.com -WhatIf
+    .\Switch-TargetAddresses.ps1 -TenantId <destination-guid> -AdminUpn admin@fabrikam.onmicrosoft.com -UserListPath .\customers\contoso\migration-users.csv -SourceSnapshot .\SourceRecipients-pre-<stamp>.csv `
+        -Domain contoso.com -Customer contoso -WhatIf
 
 .EXAMPLE
-    .\Switch-TargetAddresses.ps1 -TenantId <destination-guid> -AdminUpn admin@fabrikam.onmicrosoft.com -MappingFile .\UserMapping.csv `
-        -SourceSnapshot .\SourceRecipients-pre-<stamp>.csv -Domain contoso.com, contoso.co.uk -RemoveConflictingGuests
+    .\Switch-TargetAddresses.ps1 -TenantId <destination-guid> -AdminUpn admin@fabrikam.onmicrosoft.com -UserListPath .\customers\contoso\migration-users.csv `
+        -SharedMailboxMappingPath .\customers\contoso\shared-mailbox-mapping.csv -SourceSnapshot .\SourceRecipients-pre-<stamp>.csv -Domain contoso.com -Customer contoso -RemoveConflictingGuests
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)
@@ -99,10 +98,10 @@
 [CmdletBinding(SupportsShouldProcess)]
 param(
     [Parameter(Mandatory)][ValidatePattern('^[0-9a-fA-F-]{36}$')][string]$TenantId,
-    [Parameter(Mandatory)][string]$MappingFile,
+    [Parameter(Mandatory)][string]$UserListPath,
+    [string]$SharedMailboxMappingPath,
     [Parameter(Mandatory)][string]$SourceSnapshot,
     [Parameter(Mandatory)][string[]]$Domain,
-    [string]$PlanFile = '.\TargetBuildPlan.csv',
     [Parameter(Mandatory)][string]$AdminUpn,
     [Parameter(Mandatory)][string]$Customer,
     [switch]$Force,
@@ -116,9 +115,11 @@ function Get-DomainOf($a) { "$a".Split('@')[-1].ToLower() }
 
 # ------------------------------------------------------------ snapshot sanity, before connecting to anything
 if (-not (Test-Path $SourceSnapshot)) { throw "Snapshot $SourceSnapshot not found." }
-if (-not (Test-Path $MappingFile)) { throw "Mapping file $MappingFile not found." }
+Import-Module (Join-Path $PSScriptRoot '..\tools\Orchestrator.psm1') -Force
+$addressMap = Get-AddressMap -UserListPath $UserListPath -SharedMailboxMappingPath $SharedMailboxMappingPath
+if ($addressMap.Duplicates) { Write-Warning "Duplicate source rows ignored: $($addressMap.Duplicates -join ', ')" }
 $snapRows = @(Import-Csv $SourceSnapshot)
-$mapRows = @(Import-Csv $MappingFile | Where-Object { $_.Source -and $_.Destination })
+$mapRows = @($addressMap.Map.GetEnumerator() | ForEach-Object { [pscustomobject]@{ Source = $_.Key; Destination = $_.Value } })
 $withDomain = @($snapRows | Where-Object { "$($_.EmailAddresses)".Split(';') | Where-Object { $_ -match '^smtp:(.+)$' -and $Domain -contains (Get-DomainOf $Matches[1]) } }).Count
 $withLegDn = @($snapRows | Where-Object { $_.LegacyExchangeDN }).Count
 $snapAddr = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
@@ -180,12 +181,6 @@ foreach ($s in $snapRows) {
     }
     $snapIndex["$($s.PrimarySmtpAddress)".ToLower()] = $s
 }
-$plan = @{}
-if (Test-Path $PlanFile) {
-    Import-Csv $PlanFile | Where-Object { $_.Include -eq 'True' } | ForEach-Object { $plan["$($_.SourceAddress)".ToLower()] = $_ }
-}
-else { Write-Warning "$PlanFile not found. Every recipient gets aliases only: no primary address changes." }
-
 $work = [System.Collections.Generic.List[object]]::new()
 $seen = [System.Collections.Generic.HashSet[string]]::new()
 foreach ($m in $mapRows) {
@@ -232,14 +227,14 @@ foreach ($w in $work) {
     $dest = Get-EXORecipient -Identity $w.Destination -Properties EmailAddresses, ExternalDirectoryObjectId, RecipientTypeDetails -ErrorAction SilentlyContinue
     if (-not $dest) { Add-Result $w.Source 'Problem' "Destination $($w.Destination) not found"; continue }
     $type = "$($dest.RecipientTypeDetails)"
-    $set, $primaryParam = switch -Regex ($type) {
-        '^GroupMailbox$'                          { 'Set-UnifiedGroup', 'PrimarySmtpAddress'; break }
-        'Mailbox$'                                { 'Set-Mailbox', 'WindowsEmailAddress'; break }
-        '^Mail(Universal|NonUniversal)'           { 'Set-DistributionGroup', 'PrimarySmtpAddress'; break }
-        '^DynamicDistributionGroup$'              { 'Set-DynamicDistributionGroup', 'PrimarySmtpAddress'; break }
-        '^(MailUser|GuestMailUser)$'              { 'Set-MailUser', 'PrimarySmtpAddress'; break }
-        '^MailContact$'                           { 'Set-MailContact', $null; break }
-        default                                   { $null, $null }
+    $set = switch -Regex ($type) {
+        '^GroupMailbox$'                          { 'Set-UnifiedGroup'; break }
+        'Mailbox$'                                { 'Set-Mailbox'; break }
+        '^Mail(Universal|NonUniversal)'           { 'Set-DistributionGroup'; break }
+        '^DynamicDistributionGroup$'              { 'Set-DynamicDistributionGroup'; break }
+        '^(MailUser|GuestMailUser)$'              { 'Set-MailUser'; break }
+        '^MailContact$'                           { 'Set-MailContact'; break }
+        default                                   { $null }
     }
     if (-not $set) { Add-Result $w.Source 'Problem' "Recipient type $type not handled"; continue }
 
@@ -299,9 +294,6 @@ foreach ($w in $work) {
         if ($addr -eq $w.Source) { $sourceBlocked = $true }
     }
 
-    $full = $plan.ContainsKey($w.Source) -or ($w.Origin -eq 'Tagged' -and $type -ne 'MailContact')
-    $makePrimary = $full -and $primaryParam -and -not $sourceBlocked -and ($usable -contains (Get-DomainOf $w.Source)) -and
-                   ("$($dest.PrimarySmtpAddress)".ToLower() -ne $w.Source)
     $id = if ($dest.ExternalDirectoryObjectId) { $dest.ExternalDirectoryObjectId } else { "$($dest.Identity)" }
 
     try {
@@ -312,15 +304,7 @@ foreach ($w in $work) {
             }
             else { Add-Result $w.Source 'WhatIf' "Would add $($add -join ', ')" }
         }
-        if ($makePrimary) {
-            if ($PSCmdlet.ShouldProcess($w.Destination, "Primary address -> $($w.Source)")) {
-                $p = @{ Identity = $id; ErrorAction = 'Stop' }; $p[$primaryParam] = $w.Source
-                & $set @p
-                Add-Result $w.Source 'Done' "Primary address now $($w.Source)"
-            }
-            else { Add-Result $w.Source 'WhatIf' "Would make $($w.Source) the primary address" }
-        }
-        if (-not $add -and -not $makePrimary -and -not $sourceBlocked) { Add-Result $w.Source 'Exists' 'Addresses already in place' }
+        if (-not $add -and -not $sourceBlocked) { Add-Result $w.Source 'Exists' 'Addresses already in place' }
     }
     catch { Add-Result $w.Source 'Problem' $_.Exception.Message; continue }
 }
@@ -332,4 +316,4 @@ Write-Host ''
 $log | Group-Object Status | Sort-Object Name | ForEach-Object { Write-Host ("{0,-8} {1}" -f $_.Name, $_.Count) }
 if ($log | Where-Object Status -eq 'Conflict') { Write-Host 'Conflicts: those addresses were not added. See the report for who holds each one.' -ForegroundColor Magenta }
 Write-Host "Report: $(Join-Path $outDir "SwitchTargetAddresses-$stamp.csv")" -ForegroundColor Cyan
-Write-Host 'Sign-in names (UPNs) are unchanged - run Set-TargetUpn.ps1 for those.' -ForegroundColor Yellow
+Write-Host 'Aliases only - no primary address was changed. UPNs/user primaries: Set-TargetUpn.ps1; shared/resource primaries: Set-TargetPrimaryAddress.ps1.' -ForegroundColor Yellow

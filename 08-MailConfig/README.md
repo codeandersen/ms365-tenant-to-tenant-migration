@@ -13,12 +13,13 @@ from the source and rebuilds it in the target.
 
 # Target - dry run first
 .\Copy-MailConfig.ps1 -Import -TenantId <target-guid> -AdminUpn admin@fabrikam.onmicrosoft.com -Customer contoso `
-    -ExportFolder .\customers\contoso\output\08-MailConfig\<stamp> -MappingFile .\UserMapping.csv `
+    -ExportFolder .\customers\contoso\output\08-MailConfig\<stamp> -UserListPath .\customers\contoso\migration-users.csv `
     -AddressDomain fabrikam.onmicrosoft.com -WhatIf
 ```
 
 `-AddressDomain` is the **target** domain new distribution lists get (the target onmicrosoft domain
 before the domain move, the real domain after). `-AliasPrefix` avoids alias clashes.
+Add `-SharedMailboxMappingPath <06 mapping csv>` so shared/resource mailboxes map too.
 
 ## What it covers
 

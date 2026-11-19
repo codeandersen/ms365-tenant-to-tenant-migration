@@ -15,8 +15,9 @@ technical pilot and raise the questions below with Microsoft.
 1. Does the Orchestrator's OneDrive redirect survive a UPN change made after the batch completes?
 2. Does changing the target UPN affect completed Orchestrator jobs (per-user states, Teams meeting
    links migrated by the Meeting workload)?
-3. Timing of domain removal vs the source MailUsers the migration left behind (their
-   targetAddress still points at the source domain).
+3. Timing of removing the domain from the source MailUsers the migration left behind (their
+   targetAddress routes to the destination tenant) vs mail still addressed to the old domain
+   while DNS propagates.
 4. Recommended order for onmicrosoft-first data + later custom-domain addressing.
 
 ## Order (cutover weekend)
@@ -32,8 +33,9 @@ T-0    Add-TargetDomain -Domain contoso.com        - adds unverified, prints MS=
        Remove-SourceDomain -FixApplications -RemoveDomain
        Add-TargetDomain -Verify                    - verify in target (fast once released)
        Add-TargetDomain -EnableDkim                - after selector CNAMEs exist
-       Switch-TargetAddresses                      - old addresses + X500s back onto targets (addresses only)
-       Set-TargetUpn                               - UPN -> custom domain (guarded by batch status)
+       Switch-TargetAddresses                      - old addresses + X500s back as aliases (never a primary)
+       Set-TargetUpn                               - user UPNs + primary SMTP -> custom domain (guarded by batch status)
+       Set-TargetPrimaryAddress                    - shared/resource mailbox primary SMTP per the 06 mapping CSV
        Set-DomainDnsRecords                        - MX/SPF/DKIM/autodiscover at the provider
        Block-SourceSignIn -Exclude <breakglass>    - freeze source accounts
 ```
@@ -57,8 +59,9 @@ Every change writes a **backup before touching anything**:
 | `Clear-DeletedUserDomain.ps1` | source | Frees domains held by recycle-bin users (restore as `-old@onmicrosoft`, block, re-delete) |
 | `Remove-SourceDomain.ps1` | source | Snapshot + blocker check (deleted users, synced users, app URIs, ProxyOnly) + moves everything off the domain + `-RemoveDomain` |
 | `Add-TargetDomain.ps1` | target | Add unverified, wait for the MS= TXT, `-Verify`, `-EnableDkim` |
-| `Switch-TargetAddresses.ps1` | target | Addresses only: old addresses + `X500:<LegacyExchangeDN>` back on targets (+ primary for plan rows); `-RemoveConflictingGuests` backs each guest up before deleting |
-| `Set-TargetUpn.ps1` | target | The only script that changes UPNs: UPN (+primary SMTP) to the custom domain per the 01 list; refuses unverified domains and non-Completed batches (unless `-Force`) |
+| `Switch-TargetAddresses.ps1` | target | Aliases + `X500:<LegacyExchangeDN>` only - never a primary address. Source→destination map comes from the 01 user list (+ optional `-SharedMailboxMappingPath`); `-RemoveConflictingGuests` backs each guest up before deleting |
+| `Set-TargetUpn.ps1` | target | The only script that changes user UPNs/primary SMTP: to the custom domain per the 01 list (`FinalUpn`/`FinalPrimarySmtp`); refuses unverified domains and non-Completed batches (unless `-Force`) |
+| `Set-TargetPrimaryAddress.ps1` | target | Shared/resource-mailbox primary SMTP per the 06 mapping CSV's `FinalPrimarySmtp` column (backup first, accepted-domain guard) |
 | `Set-DomainDnsRecords.ps1` | DNS | Writes the new records via GoDaddy/Cloudflare APIs, with a mandatory zone backup first |
 | `Block-SourceSignIn.ps1` | source | `accountEnabled=false` per mapping list, verified by read-back |
 

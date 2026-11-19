@@ -12,7 +12,7 @@
 .DESCRIPTION
     TL;DR: Once people are working in the destination, their source accounts are a trap: Outlook on a phone, a saved
     browser session or a shared PC keeps them sending and receiving in the old tenant, and that mail never arrives
-    in the new one. This script sets accountEnabled to false for each source account in the mapping file (or a list
+    in the new one. This script sets accountEnabled to false for each source account in the 01 user list (or a list
     you give it), reads the account back to check it really is blocked, and writes a CSV. Your own admin account is
     always skipped. Supports -WhatIf.
 
@@ -36,8 +36,8 @@
 .PARAMETER AdminUpn
     Source admin account. Any Graph session for another account or tenant is disconnected first. Never blocked.
 
-.PARAMETER MappingFile
-    The mapping CSV (Source, Destination). The Source column is used.
+.PARAMETER UserListPath
+    The 01-Design migration-users.csv. The SourcePrimarySmtp column is used.
 
 .PARAMETER User
     Instead of a mapping file, the source UPNs or addresses to block.
@@ -46,10 +46,7 @@
     UPNs or addresses never to block, e.g. a break-glass admin or a service account still in use.
 
 .EXAMPLE
-    .\Block-SourceSignIn.ps1 -TenantId <source-guid> -AdminUpn admin@contoso.onmicrosoft.com -MappingFile .\UserMapping.csv -WhatIf
-
-.EXAMPLE
-    .\Block-SourceSignIn.ps1 -TenantId <source-guid> -AdminUpn admin@contoso.onmicrosoft.com -MappingFile .\UserMapping.csv -Exclude breakglass@contoso.onmicrosoft.com
+    .\Block-SourceSignIn.ps1 -TenantId <source-guid> -AdminUpn admin@contoso.onmicrosoft.com -UserListPath .\customers\contoso\migration-users.csv -Exclude breakglass@contoso.onmicrosoft.com -WhatIf
 
 .EXAMPLE
     .\Block-SourceSignIn.ps1 -TenantId <source-guid> -AdminUpn admin@contoso.onmicrosoft.com -User alex@contoso.com, sam@contoso.com
@@ -68,7 +65,7 @@
 param(
     [Parameter(Mandatory)][ValidatePattern('^[0-9a-fA-F-]{36}$')][string]$TenantId,
     [Parameter(Mandatory)][string]$AdminUpn,
-    [Parameter(Mandatory, ParameterSetName = 'Mapping')][string]$MappingFile,
+    [Parameter(Mandatory, ParameterSetName = 'Mapping')][string]$UserListPath,
     [Parameter(Mandatory, ParameterSetName = 'List')][string[]]$User,
     # Mandatory on purpose: break-glass accounts must be excluded explicitly (pass @() for none).
     [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Exclude,
@@ -79,9 +76,10 @@ $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot '..\tools\Common.psm1') -Force
 $outDir = New-OutputFolder -Customer $Customer -Phase '09-DomainCutover'
 
+Import-Module (Join-Path $PSScriptRoot '..\tools\Orchestrator.psm1') -Force
 $targets = if ($PSCmdlet.ParameterSetName -eq 'Mapping') {
-    if (-not (Test-Path $MappingFile)) { throw "Mapping file $MappingFile not found." }
-    @(Import-Csv $MappingFile | Where-Object Source | ForEach-Object { $_.Source.Trim().ToLower() })
+    if (-not (Test-Path $UserListPath)) { throw "User list $UserListPath not found." }
+    @(Import-MigrationUserList -Path $UserListPath | Where-Object SourcePrimarySmtp | ForEach-Object { $_.SourcePrimarySmtp.Trim().ToLower() })
 }
 else { @($User | ForEach-Object { $_.Trim().ToLower() }) }
 $targets = @($targets | Where-Object { $_ } | Select-Object -Unique)

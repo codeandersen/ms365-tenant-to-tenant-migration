@@ -223,7 +223,11 @@ Describe 'Switch-TargetAddresses guest backup before delete' {
             Alias = 'old'; LegacyExchangeDN = '/o=ex'; EmailAddresses = 'smtp:old@contoso.com'; ObjectId = 'x'; SnapshotStage = 'BeforeRelease'
         }) | Export-Csv $script:snap -NoTypeInformation
         $script:map = Join-Path $TestDrive 'map.csv'
-        @([pscustomobject]@{ Source = 'old@contoso.com'; Destination = 'user@fabrikam.onmicrosoft.com' }) | Export-Csv $script:map -NoTypeInformation
+        @([pscustomobject]@{
+            SourceUpn = 'old@contoso.com'; SourcePrimarySmtp = 'old@contoso.com'; DisplayName = 'Old'; FirstName = 'O'; LastName = 'L'
+            TargetUpn = 'user@fabrikam.onmicrosoft.com'; TargetPrimarySmtp = 'user@fabrikam.onmicrosoft.com'; UsageLocation = 'DK'
+            TargetLicenseSku = 'SPE_E5'; Batch = 'wave1'; CompleteAfterDateTimeUtc = '2026-09-05T22:00:00Z'; Workloads = 'Exchange'
+        }) | Export-Csv $script:map -NoTypeInformation
 
         Mock Connect-MigrationExchange { [pscustomobject]@{ TenantID = $TenantId; UserPrincipalName = $AdminUpn } }
         Mock Connect-MigrationGraph { [pscustomobject]@{ TenantId = $TenantId; Account = $AdminUpn } }
@@ -252,7 +256,7 @@ Describe 'Switch-TargetAddresses guest backup before delete' {
     }
     It 'aborts before Remove-MgUser when the guest backup fails' {
         { & (Join-Path $PSScriptRoot '..\09-DomainCutover\Switch-TargetAddresses.ps1') -TenantId $script:Tid -AdminUpn 'admin@fabrikam.com' `
-            -MappingFile $script:map -SourceSnapshot $script:snap -Domain contoso.com -Customer testcust -RemoveConflictingGuests } | Should -Throw '*Guest backup*'
+            -UserListPath $script:map -SourceSnapshot $script:snap -Domain contoso.com -Customer testcust -RemoveConflictingGuests } | Should -Throw '*Guest backup*'
         $global:RemoveCalls | Should -Be 0
     }
 }
