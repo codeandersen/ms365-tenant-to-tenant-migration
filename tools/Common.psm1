@@ -439,4 +439,32 @@ function New-OutputFolder {
     return $path
 }
 
-Export-ModuleMember -Function Assert-TenantContext, Connect-MigrationGraph, Connect-MigrationExchange, Connect-MigrationTeams, Connect-MigrationSharePoint, Connect-MigrationCompliance, Get-TenantIdFromDomain, ConvertFrom-OpenIdIssuer, Export-CsvSafe, Write-Log, New-OutputFolder
+Export-ModuleMember -Function Assert-TenantContext, Connect-MigrationGraph, Connect-MigrationExchange, Connect-MigrationTeams, Connect-MigrationSharePoint, Connect-MigrationCompliance, Get-TenantIdFromDomain, ConvertFrom-OpenIdIssuer, Export-CsvSafe, Write-Log, New-OutputFolder, Get-GraphAll
+
+function Get-GraphAll {
+    <#
+    .SYNOPSIS
+        Follows @odata.nextLink so paged Microsoft Graph GETs return every item.
+
+    .PARAMETER Uri
+        Graph request URI (v1.0/... or a full https:// URL).
+
+    .PARAMETER Headers
+        Optional request headers.
+
+    .EXAMPLE
+        Get-GraphAll 'v1.0/devices?$select=id,displayName'
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Uri,
+        [hashtable]$Headers = @{}
+    )
+    $out = [System.Collections.Generic.List[object]]::new()
+    while ($Uri) {
+        $page = Invoke-MgGraphRequest -Method GET -Uri $Uri -Headers $Headers
+        foreach ($v in @($page.value)) { $out.Add($v) }
+        $Uri = $page.'@odata.nextLink'
+    }
+    $out
+}

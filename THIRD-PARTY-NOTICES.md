@@ -25,6 +25,11 @@ This repository incorporates code adapted from the following upstream project.
 | `07-DomainCutover/Test-CutoverReadiness.ps1`     | `09-DomainCutover/Test-CutoverReadiness.ps1` | adapted |
 | `07-DomainCutover/Switch-TargetAddresses.ps1`    | `09-DomainCutover/Switch-TargetAddresses.ps1` | adapted |
 | `07-DomainCutover/Block-SourceSignIn.ps1`        | `09-DomainCutover/Block-SourceSignIn.ps1` | adapted |
+| `08-Devices/Get-DeviceInventory.ps1`             | `10-Devices/Get-DeviceInventory.ps1`      | adapted |
+| `08-Devices/Export-BitLockerKeys.ps1`            | `10-Devices/Get-BitLockerKeyReport.ps1`   | adapted (key values never read or written) |
+| `09-Validation/Test-TargetTenant.ps1`            | `11-Validation/Test-TargetTenant.ps1`     | adapted |
+| `10-Decommission/Get-DecommissionReadiness.ps1`  | `12-Decommission/Get-DecommissionReadiness.ps1` | adapted |
+| `docs/*` (risk/lessons/comms structure)          | `docs/Risk-Register.md`, `docs/Lessons-Learnt.md`, `docs/Comms-Templates.md` | inspired |
 
 Each adapted file carries a header noting the adaptation and a short list of
 the changes made.

@@ -8,6 +8,9 @@ dependency to unwind).
 
 Official docs: [Migration Orchestrator overview (Microsoft Learn)](https://learn.microsoft.com/microsoft-365/migration/migration-orchestrator-1-overview).
 
+**Start at [`docs/Runbook.md`](docs/Runbook.md)** — the canonical T-30 → T+30 timeline
+with go/no-go gates. Background material lives in [`docs/`](docs/).
+
 ## Read this first
 
 - **These scripts have not been run against a live tenant.** Treat every one
@@ -55,9 +58,9 @@ Official docs: [Migration Orchestrator overview (Microsoft Learn)](https://learn
 | `09-DomainCutover`      | Domain move + DNS (MX/SPF/DKIM/autodiscover)                     | Yes (both)        |
 | `10-Devices`            | New PCs enrolled directly in target via Autopilot/Intune — no in-place device move | Yes (target) |
 | `11-Validation`         | Post-cutover validation                                          | No                |
-| `12-Decommission`       | Source tenant decommission checklist                             | Yes (source)      |
+| `12-Decommission`       | Migration-artifact cleanup + source readiness report             | Yes (both)        |
 | `tools/`                | Shared module, module health check, report reader                | No                |
-| `docs/`                 | Runbooks and background notes                                    | No                |
+| `docs/`                 | Runbook, what-doesn't-move, user guide, templates and registers  | No                |
 | `customers/`            | Local per-customer working folders — **gitignored**              | n/a               |
 | `tests/`                | Parse check, PSScriptAnalyzer, Pester tests, customer-data leak guard | No           |
 

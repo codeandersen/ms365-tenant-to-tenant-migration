@@ -518,6 +518,54 @@ function ConvertFrom-InPlaceHold {
     return $out.ToArray()
 }
 
+function Test-MigratedUserState {
+    <#
+    .SYNOPSIS
+        Read-only helper: decides whether one migrated user is in the expected post-migration state.
+
+    .DESCRIPTION
+        Pure evaluation used by 11-Validation/Test-TargetTenant.ps1. Returns an object with
+        Pass (bool) and Problems (string[]). Rules:
+          - RecipientType must be a mailbox type (UserMailbox expected; shared/room/equipment count
+            as mailbox but are noted, since 06 handles them separately).
+          - LicensedExchange / LicensedTeams must be true.
+          - OneDriveFound must be true (ODSP workload users).
+          - Every entry in WorkloadStatuses must be 'Completed' or 'CompletedWithErrors' (errors
+            still count as terminal but are flagged in Problems as a warning detail via Pass=$false
+            only when a status is missing or non-terminal).
+          - TeamsChatStatus, when present, must read completed/done.
+
+    .EXAMPLE
+        Test-MigratedUserState -RecipientType UserMailbox -LicensedExchange $true -LicensedTeams $true `
+            -OneDriveFound $true -WorkloadStatuses 'Completed','Completed'
+    #>
+    [CmdletBinding()]
+    param(
+        [string]$RecipientType,
+        [bool]$LicensedExchange,
+        [bool]$LicensedTeams,
+        [bool]$OneDriveFound,
+        [string[]]$WorkloadStatuses = @(),
+        [string]$TeamsChatStatus
+    )
+    $problems = [System.Collections.Generic.List[string]]::new()
+    if ($RecipientType -notmatch 'Mailbox$') { $problems.Add("recipient is '$RecipientType', expected a mailbox") }
+    elseif ($RecipientType -ne 'UserMailbox') { $problems.Add("recipient is '$RecipientType' - shared/resource mailboxes go through phase 06, not Orchestrator batches") }
+    if (-not $LicensedExchange) { $problems.Add('no Exchange-capable licence') }
+    if (-not $LicensedTeams) { $problems.Add('no Teams-capable licence') }
+    if (-not $OneDriveFound) { $problems.Add('no OneDrive found for the target sign-in name') }
+    if (-not $WorkloadStatuses.Count) {
+        $problems.Add('no batch workload status rows found')
+    }
+    else {
+        foreach ($s in $WorkloadStatuses) {
+            if ($s -notin 'Completed', 'CompletedWithErrors') { $problems.Add("workload status '$s' is not Completed") }
+        }
+    }
+    if ($TeamsChatStatus -and $TeamsChatStatus -notmatch 'Completed|Done|Success') { $problems.Add("Teams chat status '$TeamsChatStatus'") }
+    [pscustomobject]@{ Pass = ($problems.Count -eq 0); Problems = @($problems) }
+}
+
 Export-ModuleMember -Function Import-MigrationUserList, ConvertTo-WorkloadList, Split-MigrationBatch,
     ConvertTo-CrossTenantMigrationJobBody, Test-ValidationFresh, Compare-MigrationIdentity, Select-LicensableUser, Get-GraphValue,
-    Resolve-PermissionTrustee, ConvertFrom-InPlaceHold
+    Resolve-PermissionTrustee, ConvertFrom-InPlaceHold, Test-MigratedUserState
