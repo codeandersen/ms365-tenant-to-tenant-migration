@@ -1,0 +1,5 @@
+TeamName,TeamId
+# Teams to export to PDF - one row per team, TeamId only needed for duplicate names
+IT-Drift,
+HR-Personale,
+Ledelse,00000000-0000-0000-0000-000000000000

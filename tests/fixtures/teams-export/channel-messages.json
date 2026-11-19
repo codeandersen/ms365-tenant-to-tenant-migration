@@ -1,0 +1,84 @@
+{
+  "value": [
+    {
+      "id": "m1",
+      "replyToId": null,
+      "messageType": "message",
+      "createdDateTime": "2025-01-02T09:00:00Z",
+      "lastModifiedDateTime": "2025-01-02T09:00:00Z",
+      "deletedDateTime": null,
+      "subject": "Kickoff",
+      "from": { "user": { "id": "u1", "displayName": "Søren Å" }, "application": null },
+      "body": { "contentType": "html", "content": "<p>Welcome to <b>Generelt</b> æøå <script>alert(1)</script></p>" },
+      "attachments": [
+        { "id": "hc1", "contentType": "reference", "contentUrl": "https://graph.microsoft.com/v1.0/teams/t1/channels/c1/messages/m1/hostedContents/hc1/$value", "name": null }
+      ],
+      "mentions": [
+        { "mentioned": { "user": { "displayName": "Anna Andersen" }, "application": null } }
+      ],
+      "reactions": [
+        { "reactionType": "👍", "user": { "displayName": "Anna Andersen" } },
+        { "reactionType": "👍", "user": { "displayName": "Bo B" } },
+        { "reactionType": "❤", "user": { "displayName": "Anna Andersen" } }
+      ],
+      "replies": [
+        {
+          "id": "r1",
+          "messageType": "message",
+          "createdDateTime": "2025-01-02T09:15:00Z",
+          "lastModifiedDateTime": "2025-01-02T09:30:00Z",
+          "deletedDateTime": null,
+          "from": { "user": { "id": "u2", "displayName": "Anna Andersen" }, "application": null },
+          "body": { "contentType": "html", "content": "<p>Sure <a href=\"javascript:evil()\">click</a> <a href=\"https://contoso.com/x\">link</a> <img src=\"https://graph.microsoft.com/hostedContents/hc1/$value\"></p>" },
+          "attachments": [ { "id": "hc1", "contentType": "reference", "contentUrl": ".../hostedContents/hc1/$value", "name": null } ],
+          "mentions": [], "reactions": []
+        },
+        {
+          "id": "r2",
+          "messageType": "message",
+          "createdDateTime": "2025-01-02T10:00:00Z",
+          "lastModifiedDateTime": "2025-01-02T10:00:00Z",
+          "deletedDateTime": "2025-01-03T08:00:00Z",
+          "from": { "user": { "id": "u3", "displayName": "Bo B" }, "application": null },
+          "body": { "contentType": "html", "content": "" },
+          "attachments": [], "mentions": [], "reactions": []
+        },
+        {
+          "id": "r3",
+          "messageType": "message",
+          "createdDateTime": "2025-01-02T11:00:00Z",
+          "lastModifiedDateTime": "2025-01-02T11:00:00Z",
+          "deletedDateTime": null,
+          "from": { "user": null, "application": { "displayName": "Contoso Bot" } },
+          "body": { "contentType": "html", "content": "<attachment>card</attachment>" },
+          "attachments": [], "mentions": [], "reactions": []
+        }
+      ]
+    },
+    {
+      "id": "sys1",
+      "messageType": "systemEventMessage",
+      "createdDateTime": "2025-01-02T08:00:00Z",
+      "from": { "user": null },
+      "body": { "contentType": "html", "content": "" },
+      "attachments": [], "mentions": [], "reactions": [], "replies": []
+    },
+    {
+      "id": "m2",
+      "replyToId": null,
+      "messageType": "message",
+      "createdDateTime": "2025-01-05T14:00:00Z",
+      "lastModifiedDateTime": "2025-01-05T14:00:00Z",
+      "deletedDateTime": null,
+      "subject": "",
+      "from": { "user": { "id": "u2", "displayName": "Anna Andersen" }, "application": null },
+      "body": { "contentType": "html", "content": "<p>Plan for migration <span onclick=\"x()\">now</span></p>" },
+      "attachments": [
+        { "id": "a1", "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "contentUrl": "https://contoso.sharepoint.com/sites/it/file.xlsx", "name": "plan.xlsx" }
+      ],
+      "mentions": [], "reactions": [],
+      "replies_nextLink": "https://graph.microsoft.com/v1.0/teams/t1/channels/c1/messages/m2/replies?$top=200&$skip=200",
+      "replies": []
+    }
+  ]
+}

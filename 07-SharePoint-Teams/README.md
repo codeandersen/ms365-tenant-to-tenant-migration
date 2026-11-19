@@ -41,6 +41,59 @@ steps 1-7). Facts verified against the docs:
 | Teams channels/messages | no | partial (re-creation options) |
 | Scale | 4,000 queued, server-side | tool throughput |
 
+## Archive channel conversations to PDF — `Export-TeamsChannelsToPdf.ps1` (read-only, source)
+
+Channel **messages** do not migrate with either track. This script gives the source
+administrator a readable, self-contained PDF archive of every channel in a chosen set
+of teams so they can decide whether a PDF archive is good enough — or whether live
+history needs a third-party import. **Importing messages into the target is a separate
+later step** (it needs target app permissions, author mapping, existing target channels
+and link rewriting) and is intentionally not part of this script.
+
+What it does, per team in `-TeamListPath` (`01-Design/templates/teams-export-list.csv`):
+
+1. Resolves the team (`TeamId` column if given, else a display-name search on
+   `resourceProvisioningOptions` — zero hits = `NotFound`, several = `Ambiguous`).
+2. Lists channels via `GET /teams/{id}/allChannels` (standard + private + shared) with a
+   `/channels` fallback; channels the admin cannot read are reported `Forbidden`, not fatal.
+3. Pages `GET .../messages?$top=50&$expand=replies`, following the per-thread replies
+   nextLink beyond 200 replies (`ThreadsOver200Replies` is recorded).
+4. Downloads hosted images (embedded as data URIs unless `-NoImages`), keeps deleted
+   messages as placeholders, excludes but counts system messages.
+5. Renders one sanitised HTML page per channel (scripts/iframes/`on*=`/`javascript:` stripped),
+   writes raw JSON, and prints a PDF via headless Edge/Chrome.
+
+Parameters: `-TenantId` (GUID), `-AdminUpn`, `-TeamListPath`, `-Customer` (required);
+`-PdfEngine Auto|Edge|Chrome|None`, `-BrowserPath`, `-SinceUtc`, `-MaxMessagesPerChannel`,
+`-IncludeImages`/`-NoImages` (optional). Sign-in is interactive delegated Graph in the
+**source** tenant — no tenant changes.
+
+Output under `customers/<c>/output/07-SharePoint-Teams/<ts>/`: `pdf/` (`<Team> - <Channel>.pdf`),
+`html/` (same pages, kept when no browser is found — `PdfStatus=HtmlOnly`), `json/` (raw Graph
+pages per channel), `TeamsExportCoverage.csv` and `TeamsExportCoverage.md`.
+
+Coverage columns (per channel): team/channel identity, `Status`
+(`Exported|Forbidden|NotFound|Ambiguous|Error`), `PdfStatus`/`PdfFile`, thread/root/reply/total
+counts, `SystemMessagesExcluded`, `DeletedPlaceholders`, oldest/newest timestamps + `HistoryDays`,
+`DistinctAuthors`, `InlineImages`/`ImagesEmbedded`/`ImagesFailed`, `FileAttachments`,
+`CardOrAppMessages`, `MessagesWithReactions`, `EditedMessages`, `ThreadsOver200Replies`,
+`TruncatedAtCap`, `Error`.
+
+Limits: reactions are flattened to counts, cards/app content, videos, recordings and files
+themselves are not captured, edit history is not reconstructed, system events are counted only,
+and attachment links point at the **source** tenant and die with decommission.
+
+**Personal data:** PDFs/HTML/JSON contain employee names and message content. Keep them under
+`customers/`, share only with the source administrator, and delete when no longer needed.
+
+Note: the headless-browser flags must be passed from **PowerShell** (or cmd) — Git Bash mangles
+`--user-data-dir`/`--print-to-pdf` arguments and Edge silently writes nothing.
+
+Learn: [list channel messages](https://learn.microsoft.com/en-us/graph/api/channel-list-messages),
+[hosting images in Teams messages](https://learn.microsoft.com/en-us/microsoftteams/platform/messaging-extensions/how-to/action-commands/respond-to-task-module-submit),
+[chats/channels don't migrate natively](https://learn.microsoft.com/en-us/microsoft-365/migration/cross-tenant-sharepoint-migration).
+*Untested against live tenants — mock-verified only.*
+
 ## What does NOT move (either track, native-specific where noted)
 
 | Item | Source |

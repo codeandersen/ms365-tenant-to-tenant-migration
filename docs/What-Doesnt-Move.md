@@ -122,7 +122,8 @@ Teams-connected site carries **SharePoint content only** — not the Teams struc
 | Doesn't migrate | What to do instead | Source |
 |---|---|---|
 | Teams and channel structure itself | Recreate in target (playbook 07) | [Learn](.../migration-orchestrator-1-overview) |
-| Channel messages / posts, tabs, apps, bots, connectors | Recreate or third-party | [Learn](.../cross-tenant-sharepoint-migration) |
+| Channel messages / posts | PDF archive per channel possible (read-only export, `07 Export-TeamsChannelsToPdf.ps1`, pilot item 27); live history needs a third-party import or is lost | [Learn](.../cross-tenant-sharepoint-migration) |
+| Tabs, apps, bots, connectors | Recreate or third-party | [Learn](.../cross-tenant-sharepoint-migration) |
 | Channel meetings | Recreate | [Learn](.../migration-orchestrator-7-end-user-exp) |
 | Private and shared channels and their sites | Recreate (channel sites not covered by the group-site move) | [Learn](.../cross-tenant-sharepoint-migration) |
 | Team settings and membership | Recreate; identity mapping preserves file permissions only for mapped users/groups | [Learn](.../cross-tenant-sharepoint-migration) |

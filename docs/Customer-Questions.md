@@ -34,6 +34,8 @@ Ask these before estimating or promising anything. Grouped by phase.
 
 - Which sites matter: team sites, communication sites, OneDrives? Approximate count and size?
 - Private/shared channel sites in use?
+- Channel conversation history: is a per-channel PDF archive (readable record, reactions/cards flattened)
+  acceptable, or must messages land as live history in the target (third-party import)?
 - Teams structure (channels, tabs, apps, Planner) that must be recreated — by whom?
 - Third-party migration tooling (e.g. ShareGate) already licensed?
 
