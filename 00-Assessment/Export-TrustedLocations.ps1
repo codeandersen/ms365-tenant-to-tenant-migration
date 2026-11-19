@@ -59,7 +59,6 @@ function Test-CidrRange {
         $o = @($addr -split '\.' | ForEach-Object { [int]$_ })
         if ($o.Count -ne 4 -or @($o | Where-Object { $_ -gt 255 }).Count) { return @{ Valid = $false; Family = 'IPv4'; PrivateOrReserved = $false; Reason = 'invalid IPv4 octet' } }
         if ($prefix -gt 32) { return @{ Valid = $false; Family = 'IPv4'; PrivateOrReserved = $false; Reason = 'prefix > 32' } }
-        $ip = [uint64]$o[0] * 16777216 + [uint64]$o[1] * 65536 + [uint64]$o[2] * 256 + [uint64]$o[3]
         $priv = @(
             @{ Ip = '10.0.0.0';     Name = 'private 10.0.0.0/8' },
             @{ Ip = '172.16.0.0';   Name = 'private 172.16.0.0/12' },
