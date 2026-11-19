@@ -152,6 +152,23 @@ function Resolve-InventoryOutputRoot {
     throw 'Pass -Customer <name> (output goes to customers/<name>/inventory) or -OutputRoot <path>.'
 }
 
+function Test-InventoryOutputPath {
+    # Pure copy of Test-CustomerDataPath (tools/Common.psm1) - the collector stays
+    # standalone and must not import the module. $true = outside the repo or under
+    # customers/<name>/<something>; $false = anywhere else inside the repo.
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$RepoRoot)
+    $sep  = [IO.Path]::DirectorySeparatorChar
+    $full = [IO.Path]::GetFullPath($Path).TrimEnd('\', '/')
+    $repo = [IO.Path]::GetFullPath($RepoRoot).TrimEnd('\', '/')
+    if (-not $full.StartsWith("$repo$sep", 'OrdinalIgnoreCase')) {
+        return (-not $full.Equals($repo, 'OrdinalIgnoreCase'))
+    }
+    $customers = Join-Path $repo 'customers'
+    if (-not $full.StartsWith("$customers$sep", 'OrdinalIgnoreCase')) { return $false }
+    $rest = $full.Substring($customers.Length).TrimStart('\', '/')
+    return ($rest -match '[\\/]')
+}
+
 # Child processes get -Sections as one comma-separated string via -File
 $Sections     = @($Sections     | ForEach-Object { "$_" -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 $SkipSections = @($SkipSections | ForEach-Object { "$_" -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
@@ -166,14 +183,16 @@ if ($ServiceGroup) {
     if (-not (Test-Path $OutputFolder)) { throw "-OutputFolder not found: $OutputFolder" }
     $outDir      = (Resolve-Path $OutputFolder).Path
     $attachDir   = Join-Path $outDir 'attachments'
-    $null        = New-Item -ItemType Directory -Path $attachDir -Force
 } else {
     $timestamp   = Get-Date -Format 'yyyyMMdd_HHmmss'
     $root        = Resolve-InventoryOutputRoot -OutputRoot $OutputRoot -Customer $Customer -RepoRoot (Split-Path $PSScriptRoot -Parent)
     $outDir      = Join-Path $root "Inventory_${TenantName}_${Role}_$timestamp"
     $attachDir   = Join-Path $outDir 'attachments'
-    $null        = New-Item -ItemType Directory -Path $attachDir -Force
 }
+if (-not (Test-InventoryOutputPath -Path $outDir -RepoRoot (Split-Path $PSScriptRoot -Parent))) {
+    throw "Output would be written inside the repository outside customers/ - use customers/<name>/... (gitignored) or a path outside the repo: $outDir"
+}
+if (-not $ServiceGroup) { $null = New-Item -ItemType Directory -Path $attachDir -Force }
 $logPath     = Join-Path $outDir 'Collection.log'
 
 $script:Summary = [ordered]@{

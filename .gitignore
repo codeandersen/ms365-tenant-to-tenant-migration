@@ -17,3 +17,14 @@ TestResults*
 *.ppkg
 *.pfx
 *.xlsx
+
+# Defence in depth: report/export artifacts must never be tracked even if a
+# script is pointed at a repo path by mistake (see Assert-CustomerDataPath)
+Review.md
+Readiness.md
+TrustedLocations-for-target.*
+TrustedLocations-README.md
+TeamsExportCoverage.*
+*.pdf
+summary.json
+!tests/fixtures/**/summary.json

@@ -18,7 +18,10 @@ customers/<name>/
 
 Inventory, mapping and export files contain personal data (names, e-mail
 addresses, tenant IDs). They must never be committed, pushed, or pasted into
-tickets or chat — that is why everything lives here and nowhere else.
+tickets or chat — that is why everything lives here and nowhere else. Scripts
+enforce it: every write goes through `Assert-CustomerDataPath`, which refuses
+any output path inside the repo outside `customers/<name>/` (paths outside the
+repo are still allowed).
 
 ## The denylist
 

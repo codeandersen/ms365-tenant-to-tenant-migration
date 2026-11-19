@@ -56,6 +56,9 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+Import-Module (Join-Path $PSScriptRoot '..\tools\Common.psm1') -Force
+# Refuse a repo-internal output path before reading anything
+Assert-CustomerDataPath -Path $(if ($OutFile) { $OutFile } else { Join-Path $InventoryPath 'Readiness.md' })
 
 $LearnOverview  = 'https://learn.microsoft.com/en-us/microsoft-365/migration/migration-orchestrator-1-overview'
 $LearnMailbox   = 'https://learn.microsoft.com/en-us/microsoft-365/migration/cross-tenant-mailbox-migration'

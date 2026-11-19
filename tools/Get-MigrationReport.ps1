@@ -77,6 +77,7 @@ if ($Customer) {
     if (-not $Recurse) { $Recurse = [switch]::new($true) }
 }
 if (-not $Folder) { $Folder = '.' }
+if ($OutFile) { Assert-CustomerDataPath -Path $OutFile }
 if (-not (Test-Path $Folder)) { throw "$Folder not found." }
 $Folder = (Resolve-Path $Folder).Path
 
@@ -207,6 +208,7 @@ th{background:#f2f2f2}.ok{color:#2e7d32}.warn{color:#b26a00}.muted{color:#777;fo
         [void]$sb.Append('</table>')
     }
     $out = Join-Path $Folder "MigrationReport-$(Get-Date -Format 'yyyyMMdd-HHmm').html"
+    Assert-CustomerDataPath -Path $out
     $sb.ToString() | Out-File -FilePath $out -Encoding utf8BOM
     Write-Host "HTML: $out" -ForegroundColor Cyan
 }

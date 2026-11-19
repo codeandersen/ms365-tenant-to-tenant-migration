@@ -170,6 +170,7 @@ $defaultRights = @{ 'Calendar|Default' = 'AvailabilityOnly'; 'Calendar|Anonymous
 # ============================================================ EXPORT
 if ($Export) {
     if (-not $OutputFolder) { $OutputFolder = New-OutputFolder -Customer $Customer -Phase '08-MailConfig' }
+    Assert-CustomerDataPath -Path $OutputFolder
     New-Item -ItemType Directory -Path $OutputFolder -Force -WhatIf:$false | Out-Null
 
     $cache = @{}

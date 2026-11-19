@@ -435,11 +435,55 @@ function New-OutputFolder {
 
     $stamp = [datetime]::Now.ToString('yyyyMMdd-HHmmss', [System.Globalization.CultureInfo]::InvariantCulture)
     $path = Join-Path $Root (Join-Path 'customers' (Join-Path $Customer (Join-Path 'output' (Join-Path $Phase $stamp))))
+    Assert-CustomerDataPath -Path $path -RepoRoot $Root
     $null = New-Item -ItemType Directory -Path $path -Force
     return $path
 }
 
-Export-ModuleMember -Function Assert-TenantContext, Connect-MigrationGraph, Connect-MigrationExchange, Connect-MigrationTeams, Connect-MigrationSharePoint, Connect-MigrationCompliance, Get-TenantIdFromDomain, ConvertFrom-OpenIdIssuer, Export-CsvSafe, Write-Log, New-OutputFolder, Get-GraphAll
+function Test-CustomerDataPath {
+    <#
+    .SYNOPSIS
+        Returns $true when -Path may hold customer data: outside the repository, or
+        inside <repo>\customers\<name>\<something>. Returns $false anywhere else in the
+        repo (incl. customers\ itself and customers\README.md).
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [string]$RepoRoot = (Split-Path -Parent $PSScriptRoot)
+    )
+    $sep  = [IO.Path]::DirectorySeparatorChar
+    $full = [IO.Path]::GetFullPath($Path).TrimEnd('\', '/')
+    $repo = [IO.Path]::GetFullPath($RepoRoot).TrimEnd('\', '/')
+    if (-not $full.StartsWith("$repo$sep", 'OrdinalIgnoreCase')) {
+        return (-not $full.Equals($repo, 'OrdinalIgnoreCase'))  # outside the repo (the root itself is refused)
+    }
+    $customers = Join-Path $repo 'customers'
+    if (-not $full.StartsWith("$customers$sep", 'OrdinalIgnoreCase')) { return $false }
+    # under customers/: require <name>\<something> - one segment alone (README.md,
+    # .denylist, or a bare customer folder) is not a valid output target
+    $rest = $full.Substring($customers.Length).TrimStart('\', '/')
+    return ($rest -match '[\\/]')
+}
+
+function Assert-CustomerDataPath {
+    <#
+    .SYNOPSIS
+        Throws unless -Path is a valid customer-data location (see Test-CustomerDataPath).
+        Called before any script writes output so customer data can never land inside
+        the repository outside the gitignored customers/ tree.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [string]$RepoRoot = (Split-Path -Parent $PSScriptRoot)
+    )
+    if (-not (Test-CustomerDataPath -Path $Path -RepoRoot $RepoRoot)) {
+        throw "Output would be written inside the repository outside customers/ - use customers/<name>/... (gitignored) or a path outside the repo: $Path"
+    }
+}
+
+Export-ModuleMember -Function Assert-TenantContext, Connect-MigrationGraph, Connect-MigrationExchange, Connect-MigrationTeams, Connect-MigrationSharePoint, Connect-MigrationCompliance, Get-TenantIdFromDomain, ConvertFrom-OpenIdIssuer, Export-CsvSafe, Write-Log, New-OutputFolder, Get-GraphAll, Test-CustomerDataPath, Assert-CustomerDataPath
 
 function Get-GraphAll {
     <#

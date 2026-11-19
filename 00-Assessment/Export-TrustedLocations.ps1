@@ -125,6 +125,7 @@ function ConvertTo-NamedLocationBody {
 
 $attach = if (Test-Path (Join-Path $InventoryPath 'attachments')) { Join-Path $InventoryPath 'attachments' } else { $InventoryPath }
 if (-not $OutFolder) { $OutFolder = $attach }
+Assert-CustomerDataPath -Path $OutFolder
 
 $locs = [System.Collections.Generic.List[object]]::new()
 $nlPath = Join-Path $attach 'NamedLocations.csv'

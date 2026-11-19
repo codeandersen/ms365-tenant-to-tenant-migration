@@ -37,6 +37,9 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 [System.Threading.Thread]::CurrentThread.CurrentCulture = [System.Globalization.CultureInfo]::InvariantCulture
+Import-Module (Join-Path $PSScriptRoot '..\tools\Common.psm1') -Force
+# Review.md is written next to summary.json - refuse before reading anything
+Assert-CustomerDataPath -Path (Join-Path $InventoryPath 'Review.md')
 
 function ConvertTo-Num {
     # Tolerates both "12.5" (invariant) and "12,5" (da-DK) from older CSVs.
