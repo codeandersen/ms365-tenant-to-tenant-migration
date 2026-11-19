@@ -28,7 +28,7 @@ tenant pair with a test domain.
 ## Entry criteria
 
 - 02-TenantPrep complete in both tenants (all Pass on `Test-OrchestratorPrereqs.ps1`)
-- Test/pilot rows in `customers/<name>/migration-users.csv`
+- Test/pilot rows in `customers/<name>/input/migration-users.csv`
 - `CompleteAfterDateTimeUtc` a real cutover slot you can staff
 
 ## Exit criteria

@@ -1,7 +1,7 @@
 # Decision log
 
 One row per decision that shapes the migration. Keep it with the design review;
-copy it into `customers/<name>/` and fill the Decision column per project.
+copy it into `customers/<name>/input/` and fill the Decision column per project.
 
 | # | Question | Options | Decision | Decided by / date | Notes |
 |---|----------|---------|----------|-------------------|-------|

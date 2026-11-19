@@ -58,7 +58,7 @@
 .EXAMPLE
     .\Test-CutoverReadiness.ps1 -SourceTenantId <source-guid> -DestinationTenantId <destination-guid> `
         -SourceAdmin admin@contoso.onmicrosoft.com -DestinationAdmin admin@fabrikam.onmicrosoft.com `
-        -Domain contoso.com -UserListPath .\customers\contoso\migration-users.csv -SourceSnapshot .\SourceRecipients-pre-<stamp>.csv -Customer contoso
+        -Domain contoso.com -UserListPath .\customers\contoso\input\migration-users.csv -SourceSnapshot .\customers\contoso\output\09-DomainCutover\<stamp>\SourceRecipients-pre-<stamp>.csv -Customer contoso
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)

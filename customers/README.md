@@ -1,19 +1,24 @@
 # customers/ — local working folders (never committed)
 
 Everything under `customers/` is gitignored except this file. Create one folder
-per engagement and keep **all** customer material inside it:
+per engagement (`tools/New-CustomerWorkspace.ps1 -Customer <name>`) and keep
+**all** customer material inside it:
 
 ```
 customers/<name>/
-    inventory/     output of 00-Assessment\Collect-TenantInventory.ps1
-    mapping/       identity-mapping and batch CSVs (CTIM input/output)
-    output/        per-run output written by New-OutputFolder
-                   (<name>/output/<Phase>/<yyyyMMdd-HHmmss>)
+    input/       filled-in copies of 01-Design/templates (migration-users.csv,
+                 shared-mailbox mapping, office-ip-ranges.csv, teams-export-list.csv,
+                 Decision-Log.md, ...)
+    inventory/   Collect-TenantInventory output
+                 (Inventory_<Tenant>_<Role>_<stamp>\ incl. Review.md, Readiness.md,
+                 TrustedLocations-*)
+    output/      per-run output of all other scripts:
+                 output/<Phase>/<yyyyMMdd-HHmmss>/ (New-OutputFolder)
 ```
 
-Inventory and mapping files contain personal data (names, e-mail addresses,
-tenant IDs). They must never be committed, pushed, or pasted into tickets or
-chat. Keep them under `customers/<name>/` only.
+Inventory, mapping and export files contain personal data (names, e-mail
+addresses, tenant IDs). They must never be committed, pushed, or pasted into
+tickets or chat — that is why everything lives here and nowhere else.
 
 ## The denylist
 

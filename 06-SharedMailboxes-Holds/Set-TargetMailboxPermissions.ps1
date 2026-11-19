@@ -36,8 +36,8 @@
 
 .EXAMPLE
     .\Set-TargetMailboxPermissions.ps1 -TenantId 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' -AdminUpn 'admin@fabrikam.com' `
-        -PermissionsCsv .\MailboxPermissions.csv -UserListPath .\migration-users.csv `
-        -SharedMappingCsv .\shared-mailbox-mapping.csv -Customer contoso -WhatIf
+        -PermissionsCsv .\customers\contoso\output\06-SharedMailboxes-Holds\<stamp>\MailboxPermissions.csv -UserListPath .\customers\contoso\input\migration-users.csv `
+        -SharedMappingCsv .\customers\contoso\input\shared-mailbox-mapping.csv -Customer contoso -WhatIf
 
 .NOTES
     Untested against live tenants - validate in technical test/pilot.

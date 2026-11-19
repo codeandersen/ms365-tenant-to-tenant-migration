@@ -37,7 +37,7 @@
 
 .EXAMPLE
     .\Add-MigrationGroupMembers.ps1 -TenantId 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' -AdminUpn 'admin@contoso.com' `
-        -ScopeGroupName 'M365MigrationScope' -UserListPath .\customers\fabrikam\migration-users.csv -Customer fabrikam
+        -ScopeGroupName 'M365MigrationScope' -UserListPath .\customers\fabrikam\input\migration-users.csv -Customer fabrikam
 
 .NOTES
     Untested against live tenants - validate in technical test/pilot.

@@ -50,7 +50,7 @@
 
 .EXAMPLE
     .\New-SpoIdentityMap.ps1 -TenantId $target -AdminUpn admin@fabrikam.com -AdminUrl https://fabrikam-admin.sharepoint.com `
-        -SourceTenantId $source -UserListPath .\migration-users.csv -GuestMapPath .\guest-map.csv -GroupMapPath .\group-map.csv `
+        -SourceTenantId $source -UserListPath .\customers\contoso\input\migration-users.csv -GuestMapPath .\customers\contoso\output\03-Identities\<stamp>\guest-map.csv -GroupMapPath .\customers\contoso\output\03-Identities\<stamp>\group-map.csv `
         -Customer contoso -Upload -Verify
 
 .NOTES

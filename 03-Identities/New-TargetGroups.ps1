@@ -51,8 +51,8 @@
 
 .EXAMPLE
     .\New-TargetGroups.ps1 -TenantId 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' -AdminUpn 'admin@fabrikam.com' `
-        -GroupsCsv .\source-groups.csv -MembersCsv .\source-group-members.csv `
-        -UserListPath .\migration-users.csv -GuestMapPath .\guest-map.csv -Customer contoso -WhatIf
+        -GroupsCsv .\customers\contoso\output\03-Identities\<stamp>\source-groups.csv -MembersCsv .\customers\contoso\output\03-Identities\<stamp>\source-group-members.csv `
+        -UserListPath .\customers\contoso\input\migration-users.csv -GuestMapPath .\customers\contoso\output\03-Identities\<stamp>\guest-map.csv -Customer contoso -WhatIf
 
 .NOTES
     Untested against live tenants - validate in technical test/pilot.

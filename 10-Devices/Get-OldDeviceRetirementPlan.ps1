@@ -34,7 +34,7 @@
 
 .EXAMPLE
     .\Get-OldDeviceRetirementPlan.ps1 -DeviceInventoryCsv .\customers\contoso\output\10-Devices\DeviceInventory-contoso.com-20260901-1200.csv `
-        -UserListPath .\customers\contoso\migration-users.csv -Customer contoso
+        -UserListPath .\customers\contoso\input\migration-users.csv -Customer contoso
 
 .NOTES
     Untested against live tenants - validate in technical test/pilot.

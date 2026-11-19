@@ -46,7 +46,7 @@
 
 .EXAMPLE
     .\New-TargetMailUsers.ps1 -TenantId 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' -AdminUpn 'admin@fabrikam.com' `
-        -UserListPath .\customers\fabrikam\migration-users.csv -Customer fabrikam -WhatIf
+        -UserListPath .\customers\fabrikam\input\migration-users.csv -Customer fabrikam -WhatIf
 
 .NOTES
     Untested against live tenants - validate in technical test/pilot.

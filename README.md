@@ -21,8 +21,8 @@ and [`docs/After-Cutover-User-Guide.md`](docs/After-Cutover-User-Guide.md).
   production use.
 - Scripts that change a tenant support `-WhatIf`; run with `-WhatIf` first.
 - **Nothing here may run against a real customer tenant from this repo.**
-  Customer data lives under `customers/<name>/` (gitignored) — see
-  `customers/README.md`.
+  Run `tools/New-CustomerWorkspace.ps1` first — all customer data lives in
+  `customers/<name>/` and is never committed — see `customers/README.md`.
 - All examples use `contoso.com` (source) and `fabrikam.com` (target),
   `contoso.onmicrosoft.com` / `fabrikam.onmicrosoft.com`.
 

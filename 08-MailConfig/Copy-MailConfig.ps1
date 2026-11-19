@@ -88,14 +88,14 @@
 
 .EXAMPLE
     .\Copy-MailConfig.ps1 -Import -TenantId <dest-guid> -AdminUpn admin@fabrikam.onmicrosoft.com -Customer contoso `
-        -ExportFolder .\customers\contoso\output\08-MailConfig\<stamp> -UserListPath .\customers\contoso\migration-users.csv -AddressDomain fabrikam.onmicrosoft.com -WhatIf
+        -ExportFolder .\customers\contoso\output\08-MailConfig\<stamp> -UserListPath .\customers\contoso\input\migration-users.csv -AddressDomain fabrikam.onmicrosoft.com -WhatIf
 
 .EXAMPLE
     .\Copy-MailConfig.ps1 -Export -TenantId <source-guid> -AdminUpn admin@contoso.com -Customer contoso -IncludeFolders Inbox, Contacts
 
 .EXAMPLE
     .\Copy-MailConfig.ps1 -Import -TenantId <dest-guid> -AdminUpn admin@fabrikam.onmicrosoft.com -Customer contoso `
-        -ExportFolder .\customers\contoso\output\08-MailConfig\<stamp> -UserListPath .\customers\contoso\migration-users.csv -SharedMailboxMappingPath .\customers\contoso\shared-mailbox-mapping.csv -AddressDomain fabrikam.onmicrosoft.com -Include FolderPermissions -WhatIf
+        -ExportFolder .\customers\contoso\output\08-MailConfig\<stamp> -UserListPath .\customers\contoso\input\migration-users.csv -SharedMailboxMappingPath .\customers\contoso\input\shared-mailbox-mapping.csv -AddressDomain fabrikam.onmicrosoft.com -Include FolderPermissions -WhatIf
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)

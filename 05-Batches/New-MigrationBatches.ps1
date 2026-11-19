@@ -1,4 +1,4 @@
-﻿#requires -Version 7.2
+#requires -Version 7.2
 <#
 .SYNOPSIS
     Creates Orchestrator migration batches from the canonical user list (target tenant).
@@ -39,7 +39,7 @@
 
 .EXAMPLE
     .\New-MigrationBatches.ps1 -TenantId 'bbbbbbbb-cccc-dddd-eeee-ffffffffffff' -AdminUpn 'admin@fabrikam.com' `
-        -UserListPath .\customers\fabrikam\migration-users.csv -SourceTenantId 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' `
+        -UserListPath .\customers\fabrikam\input\migration-users.csv -SourceTenantId 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' `
         -SourceEndpoint 'CrossTenantMigrationEndpoint' -TargetDeliveryDomain 'fabrikam.onmicrosoft.com' `
         -Customer fabrikam -WhatIf
 

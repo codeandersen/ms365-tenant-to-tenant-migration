@@ -51,7 +51,7 @@
 
 .EXAMPLE
     .\Test-TargetTenant.ps1 -TenantId 'bbbbbbbb-cccc-dddd-eeee-ffffffffffff' -AdminUpn 'admin@fabrikam.onmicrosoft.com' `
-        -UserListPath .\customers\contoso\migration-users.csv -SharePointAdminUrl 'https://fabrikam-admin.sharepoint.com' -Customer contoso
+        -UserListPath .\customers\contoso\input\migration-users.csv -SharePointAdminUrl 'https://fabrikam-admin.sharepoint.com' -Customer contoso
 
 .NOTES
     Untested against live tenants - validate in technical test/pilot.

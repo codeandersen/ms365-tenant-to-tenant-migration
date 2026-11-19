@@ -78,12 +78,12 @@
     Never touches mailboxes, mail users or contacts. Supports -WhatIf.
 
 .EXAMPLE
-    .\Switch-TargetAddresses.ps1 -TenantId <destination-guid> -AdminUpn admin@fabrikam.onmicrosoft.com -UserListPath .\customers\contoso\migration-users.csv -SourceSnapshot .\SourceRecipients-pre-<stamp>.csv `
+    .\Switch-TargetAddresses.ps1 -TenantId <destination-guid> -AdminUpn admin@fabrikam.onmicrosoft.com -UserListPath .\customers\contoso\input\migration-users.csv -SourceSnapshot .\customers\contoso\output\09-DomainCutover\<stamp>\SourceRecipients-pre-<stamp>.csv `
         -Domain contoso.com -Customer contoso -WhatIf
 
 .EXAMPLE
-    .\Switch-TargetAddresses.ps1 -TenantId <destination-guid> -AdminUpn admin@fabrikam.onmicrosoft.com -UserListPath .\customers\contoso\migration-users.csv `
-        -SharedMailboxMappingPath .\customers\contoso\shared-mailbox-mapping.csv -SourceSnapshot .\SourceRecipients-pre-<stamp>.csv -Domain contoso.com -Customer contoso -RemoveConflictingGuests
+    .\Switch-TargetAddresses.ps1 -TenantId <destination-guid> -AdminUpn admin@fabrikam.onmicrosoft.com -UserListPath .\customers\contoso\input\migration-users.csv `
+        -SharedMailboxMappingPath .\customers\contoso\input\shared-mailbox-mapping.csv -SourceSnapshot .\customers\contoso\output\09-DomainCutover\<stamp>\SourceRecipients-pre-<stamp>.csv -Domain contoso.com -Customer contoso -RemoveConflictingGuests
 
 .NOTES
     Author  : Mezba Uddin (Microsoft MVP)

@@ -17,7 +17,7 @@ UserMatches.csv).
 
 ```
 .\Collect-TenantInventory.ps1 -Role Source -TenantName Contoso -TenantId contoso.com
-.\Collect-TenantInventory.ps1 -Role Target -TenantName Fabrikam -TenantId fabrikam.com -SourceInventoryPath .\Inventory_Contoso_Source_20261022_090302
+.\Collect-TenantInventory.ps1 -Role Target -TenantName Fabrikam -TenantId fabrikam.com -Customer contoso -SourceInventoryPath .\customers\contoso\inventory\Inventory_Contoso_Source_20261022_090302
 ```
 
 Output: `Inventory_<TenantName>_<Role>_<timestamp>\` with `attachments\*.csv`,
@@ -35,8 +35,8 @@ the CSV attachments. With `-TargetInventoryPath` it adds domain-conflict,
 migration-license and user-match checks.
 
 ```
-.\New-InventoryReport.ps1 -InventoryPath .\Inventory_Contoso_Source_20261022_090302 `
-    -TargetInventoryPath .\Inventory_Fabrikam_Target_20261023_101500
+.\New-InventoryReport.ps1 -InventoryPath .\customers\contoso\inventory\Inventory_Contoso_Source_20261022_090302 `
+    -TargetInventoryPath .\customers\contoso\inventory\Inventory_Fabrikam_Target_20261023_101500
 ```
 
 ## New-MigrationReadinessReport.ps1
@@ -50,8 +50,8 @@ inventory can't see ("not inventoried"). See
 [`docs/Migration-Method-Guide.md`](../docs/Migration-Method-Guide.md).
 
 ```
-.\New-MigrationReadinessReport.ps1 -InventoryPath .\Inventory_Contoso_Source_20261022_090302 `
-    -TargetInventoryPath .\Inventory_Fabrikam_Target_20261023_101500
+.\New-MigrationReadinessReport.ps1 -InventoryPath .\customers\contoso\inventory\Inventory_Contoso_Source_20261022_090302 `
+    -TargetInventoryPath .\customers\contoso\inventory\Inventory_Fabrikam_Target_20261023_101500
 ```
 
 New/updated collections for the readiness report:

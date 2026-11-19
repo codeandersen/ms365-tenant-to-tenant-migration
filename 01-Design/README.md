@@ -20,9 +20,9 @@
 
 - `templates/migration-users.csv` — **the one canonical user list**. Every script that
   works on users reads this shape via `Import-MigrationUserList` (tools/Orchestrator.psm1).
-  Copy it to `customers/<name>/migration-users.csv` and fill it in there — the template
+  Copy it to `customers/<name>/input/migration-users.csv` and fill it in there — the template
   in the repo stays Contoso/Fabrikam sample data.
-- `templates/Decision-Log.md` — copy to `customers/<name>/` and fill the Decision column.
+- `templates/Decision-Log.md` — copy to `customers/<name>/input/` and fill the Decision column.
 - `templates/CTIM-Mapping-CSV.md` — schema notes for the CTIM mapping file.
 
 ## Columns in migration-users.csv
@@ -39,5 +39,5 @@ TargetPrimarySmtp, UsageLocation, TargetLicenseSku, Batch, CompleteAfterDateTime
 
 ## Personal data
 
-The real user list contains personal data. Fill it in under `customers/<name>/`
+The real user list contains personal data. Fill it in under `customers/<name>/input/`
 (gitignored), never in `templates/` and never commit it.

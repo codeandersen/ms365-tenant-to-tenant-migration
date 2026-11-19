@@ -40,7 +40,7 @@
 
 .EXAMPLE
     .\Set-TargetUpn.ps1 -TenantId 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' -AdminUpn 'admin@fabrikam.onmicrosoft.com' `
-        -UserListPath .\customers\contoso\migration-users.csv -Customer contoso -WhatIf
+        -UserListPath .\customers\contoso\input\migration-users.csv -Customer contoso -WhatIf
 
 .NOTES
     Untested against live tenants - validate in technical test/pilot.

@@ -20,8 +20,14 @@
 .PARAMETER TenantName
     Short name for the tenant, used in the folder name and report. E.g. Contoso or Fabrikam.
 
+.PARAMETER Customer
+    Customer workspace name (letters, digits, '.', '_', '-'). Inventory output goes to
+    customers\<Customer>\inventory\Inventory_<TenantName>_<Role>_<stamp> - either this
+    or -OutputRoot is required for a new collection run.
+
 .PARAMETER OutputRoot
-    Root folder for output. Defaults to the folder the script is run from.
+    Root folder for output (explicit override). If omitted, -Customer must be given
+    instead - all customer material lives under customers\<name>\, never in the repo.
 
 .PARAMETER Sections
     Optional list of sections to collect. If omitted, all sections for the selected role run.
@@ -55,8 +61,9 @@
     is impossible.
 
 .EXAMPLE
-    .\Collect-TenantInventory.ps1 -Role Source -TenantName Contoso -TenantId contoso.com
-    Collects a complete inventory from the Contoso tenant. When signing in with a B2B guest
+    .\Collect-TenantInventory.ps1 -Role Source -TenantName Contoso -TenantId contoso.com -Customer contoso
+    Collects a complete inventory from the Contoso tenant into
+    customers\contoso\inventory\. When signing in with a B2B guest
     account (guest with an admin role in Contoso) the sign-in is directed into Contoso via
     -TenantId, and the script verifies the connected tenant really is Contoso before
     collecting data.
@@ -66,15 +73,15 @@
     connections. Use if sign-in fails with a WAM/broker error.
 
 .EXAMPLE
-    .\Collect-TenantInventory.ps1 -Role Source -TenantName Contoso -TenantId contoso.com
+    .\Collect-TenantInventory.ps1 -Role Source -TenantName Contoso -TenantId contoso.com -Customer contoso
     Collects a complete inventory from the Contoso tenant (sign in as Global Admin for Contoso).
 
 .EXAMPLE
-    .\Collect-TenantInventory.ps1 -Role Target -TenantName Fabrikam -SourceInventoryPath .\Inventory_Contoso_Source_20261022_090302
+    .\Collect-TenantInventory.ps1 -Role Target -TenantName Fabrikam -Customer contoso -SourceInventoryPath .\customers\contoso\inventory\Inventory_Contoso_Source_20261022_090302
     Collects the target inventory from Fabrikam and compares it with the Contoso inventory.
 
 .EXAMPLE
-    .\Collect-TenantInventory.ps1 -Role Source -TenantName Contoso -Sections Exchange,Users -SkipSections Dns
+    .\Collect-TenantInventory.ps1 -Role Source -TenantName Contoso -Customer contoso -Sections Exchange,Users -SkipSections Dns
     Runs only the Exchange and Users sections and skips DNS.
 
 .NOTES
@@ -93,7 +100,10 @@ param(
     [ValidateNotNullOrEmpty()]
     [string]$TenantName,
 
-    [string]$OutputRoot = $PSScriptRoot,
+    [ValidatePattern('^[A-Za-z0-9._-]+$')]
+    [string]$Customer,
+
+    [string]$OutputRoot,
 
     [string[]]$Sections,
 
@@ -133,6 +143,15 @@ $ErrorActionPreference = 'Stop'
 # which gives wrong sums when the CSVs are read back.
 [System.Threading.Thread]::CurrentThread.CurrentCulture = [System.Globalization.CultureInfo]::InvariantCulture
 
+function Resolve-InventoryOutputRoot {
+    # Pure: where a NEW inventory folder goes. Explicit -OutputRoot wins (unchanged
+    # behaviour); else -Customer -> <repoRoot>\customers\<Customer>\inventory; else throw.
+    param([string]$OutputRoot, [string]$Customer, [Parameter(Mandatory)][string]$RepoRoot)
+    if ($OutputRoot) { return $OutputRoot }
+    if ($Customer) { return (Join-Path $RepoRoot "customers\$Customer\inventory") }
+    throw 'Pass -Customer <name> (output goes to customers/<name>/inventory) or -OutputRoot <path>.'
+}
+
 # Child processes get -Sections as one comma-separated string via -File
 $Sections     = @($Sections     | ForEach-Object { "$_" -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 $SkipSections = @($SkipSections | ForEach-Object { "$_" -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
@@ -150,7 +169,8 @@ if ($ServiceGroup) {
     $null        = New-Item -ItemType Directory -Path $attachDir -Force
 } else {
     $timestamp   = Get-Date -Format 'yyyyMMdd_HHmmss'
-    $outDir      = Join-Path $OutputRoot "Inventory_${TenantName}_${Role}_$timestamp"
+    $root        = Resolve-InventoryOutputRoot -OutputRoot $OutputRoot -Customer $Customer -RepoRoot (Split-Path $PSScriptRoot -Parent)
+    $outDir      = Join-Path $root "Inventory_${TenantName}_${Role}_$timestamp"
     $attachDir   = Join-Path $outDir 'attachments'
     $null        = New-Item -ItemType Directory -Path $attachDir -Force
 }

@@ -46,7 +46,7 @@
     UPNs or addresses never to block, e.g. a break-glass admin or a service account still in use.
 
 .EXAMPLE
-    .\Block-SourceSignIn.ps1 -TenantId <source-guid> -AdminUpn admin@contoso.onmicrosoft.com -UserListPath .\customers\contoso\migration-users.csv -Exclude breakglass@contoso.onmicrosoft.com -WhatIf
+    .\Block-SourceSignIn.ps1 -TenantId <source-guid> -AdminUpn admin@contoso.onmicrosoft.com -UserListPath .\customers\contoso\input\migration-users.csv -Exclude breakglass@contoso.onmicrosoft.com -WhatIf
 
 .EXAMPLE
     .\Block-SourceSignIn.ps1 -TenantId <source-guid> -AdminUpn admin@contoso.onmicrosoft.com -User alex@contoso.com, sam@contoso.com
