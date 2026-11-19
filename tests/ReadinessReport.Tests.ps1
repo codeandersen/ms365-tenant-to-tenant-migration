@@ -88,6 +88,24 @@ Describe 'New-MigrationReadinessReport' {
         $md3 | Should -Match 'Unknown - not inventoried'
     }
 
+    It 'renders the enterprise app usage table and excludes first-party apps' {
+        $script:Md | Should -Match 'Enterprise app usage'
+        $script:Md | Should -Match 'ActiveInWindow: 2'
+        $script:Md | Should -Match 'Contoso CRM'
+        $script:Md | Should -Match 'Inactive non-Microsoft apps \(2\)'
+        $script:Md | Should -Match 'Legacy HR'
+        $script:Md | Should -Match '1 managed identities active in the window'
+        $script:Md | Should -Not -Match 'Microsoft Teams'
+        $script:Md | Should -Match 'App sign-in history older than 30 days'
+    }
+
+    It 'marks enterprise app usage not inventoried when the CSV is missing' {
+        Remove-Item (Join-Path $script:Inv 'attachments\AppSignInActivity.csv')
+        & $script:Report -InventoryPath $script:Inv -OutFile (Join-Path $script:Inv 'R4.md')
+        $md4 = [System.IO.File]::ReadAllText((Join-Path $script:Inv 'R4.md'), [System.Text.Encoding]::UTF8)
+        $md4 | Should -Match 'Enterprise app usage.*not inventoried'
+    }
+
     It 'writes UTF-8 with BOM and keeps æøå readable' {
         $bytes = [System.IO.File]::ReadAllBytes((Join-Path $script:Inv 'Readiness.md'))
         $bytes[0] | Should -Be 0xEF

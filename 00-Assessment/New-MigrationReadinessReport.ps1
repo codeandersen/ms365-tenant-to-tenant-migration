@@ -151,6 +151,13 @@ $appRegs      = Import-AttCsv 'AppRegistrations.csv'
 $entApps      = Import-AttCsv 'EnterpriseApplications.csv'
 $caPolicies   = Import-AttCsv 'ConditionalAccessPolicies.csv'
 $extUsers     = Import-AttCsv 'ExternalUsers.csv'
+$appSignIns   = Import-AttCsv 'AppSignInActivity.csv'
+
+$invSummary = $null
+$sumPath = Join-Path $InventoryPath 'summary.json'
+if (Test-Path $sumPath) {
+    try { $invSummary = (Get-Content $sumPath -Raw | ConvertFrom-Json).metrics } catch {}
+}
 
 $userMbx  = @($mailboxes | Where-Object { $_.RecipientTypeDetails -eq 'UserMailbox' })
 $sharedMbx= @($mailboxes | Where-Object { $_.RecipientTypeDetails -in 'SharedMailbox', 'RoomMailbox', 'EquipmentMailbox' })
@@ -168,6 +175,11 @@ $m365Groups = @($groups | Where-Object { $_.GroupType -match 'Microsoft 365|Unif
 $guests     = @($users | Where-Object { $_.IsGuest -eq 'True' -or $_.UserType -eq 'Guest' })
 $privCh     = Measure-GbSum $teams 'PrivateChannels'
 $sharedCh   = Measure-GbSum $teams 'SharedChannels'
+# Fall back to TeamsChannels.csv when Teams.csv lacks the per-team channel counts
+if (($privCh + $sharedCh) -eq 0 -and $teamsChan.Count -gt 0) {
+    $privCh   = @($teamsChan | Where-Object { $_.MembershipType -eq 'private' }).Count
+    $sharedCh = @($teamsChan | Where-Object { $_.MembershipType -eq 'shared' }).Count
+}
 $pwaSites   = @($spSites | Where-Object { $_.Template -match '^(PWA#0|PROJECTSITE)' })
 
 $target = $null
@@ -594,7 +606,6 @@ Add-Decision 'Teams Phone (users with voice config)' $phoneUsers.Count 'Numbers,
 Add-Decision 'Bookings mailboxes' $bookings.Count 'Bookings is not moved - rebuild or export.'
 Add-Decision 'Project Online sites (PWA#0/PROJECTSITE)' $pwaSites.Count 'Project Online is not covered by the site move tool.'
 Add-Decision 'App registrations' $appRegs.Count 'Recreate in the target tenant.'
-Add-Decision 'Enterprise applications' $entApps.Count 'Recreate/re-consent in the target tenant.'
 Add-Decision 'Conditional Access policies' $caPolicies.Count 'Recreate in the target tenant.'
 Add-Decision 'Intune-managed devices' $intuneDevs.Count 'Devices are not moved - new PCs enrol in the target (phase 10).'
 Add-Decision 'DLP policies' $dlp.Count 'Recreate in Purview in the target.'
@@ -607,6 +618,7 @@ Add-Decision 'Mail contacts / mail users' ($contacts.Count + $mailUsers.Count) '
 Add-Decision 'Mailbox Full Access permission entries' $mbxPerms.Count 'Re-apply after the mailboxes exist (phase 06/Set-TargetMailboxPermissions).'
 Add-Decision 'Send As entries' $sendAs.Count 'Re-apply after the mailboxes exist (phase 06/09).'
 Add-Decision 'Guests' $guests.Count 'Re-invite in the target tenant.'
+Add-Decision 'External SharePoint users' $extUsers.Count 'External users in SPO sharing - re-invite or re-share in the target tenant.'
 
 # Service-plan indicators
 if ($servicePlans.Count -gt 0) {
@@ -641,6 +653,52 @@ if ($decRows.Count -gt 0) {
     $null = $r.AppendLine('_Nothing detected._')
 }
 $null = $r.AppendLine('')
+
+# Enterprise app usage (AppSignInActivity.csv from the AppSignIns inventory section)
+$signInListDoc = 'https://learn.microsoft.com/en-us/graph/api/signin-list?view=graph-rest-beta'
+$spActDoc      = 'https://learn.microsoft.com/en-us/graph/api/reportroot-list-serviceprincipalsigninactivities?view=graph-rest-beta'
+if ($appSignIns.Count -gt 0) {
+    $null = $r.AppendLine('### Enterprise app usage')
+    $null = $r.AppendLine('')
+    $nonMs = @($appSignIns | Where-Object { $_.IsMicrosoftFirstParty -ne 'True' })
+    $stCounts = @($nonMs | Group-Object Status | ForEach-Object { "$($_.Name): $($_.Count)" })
+    $null = $r.AppendLine("Non-Microsoft apps by status - $($stCounts -join ' - ')")
+    $null = $r.AppendLine('')
+    $activeApps = @($nonMs | Where-Object { $_.Status -eq 'ActiveInWindow' } | Sort-Object { $_.LastSeenAny } -Descending | Select-Object -First 25)
+    if ($activeApps.Count -gt 0) {
+        $null = $r.AppendLine('**Active non-Microsoft apps** (top 25, sign-in within the lookback window):')
+        $null = $r.AppendLine('')
+        $null = $r.AppendLine((Format-Table $activeApps @('DisplayName','AppId','ServicePrincipalType','LastInteractiveUser','LastNonInteractiveUser','LastServicePrincipal','LastManagedIdentity','DaysSinceLastSeen')))
+        $null = $r.AppendLine('')
+    }
+    $inactive = @($nonMs | Where-Object { $_.Status -in 'ActiveEarlier','NoActivityRecorded','Unknown' -and $_.IsManagedIdentity -ne 'True' })
+    if ($inactive.Count -gt 0) {
+        $null = $r.AppendLine("**Inactive non-Microsoft apps ($($inactive.Count)) - candidates not to rebuild in the target** (confirm each owner first): " + (($inactive | Select-Object -First 25 | ForEach-Object DisplayName) -join ', ') + $(if ($inactive.Count -gt 25) { ' - ...' } else { '' }))
+        $null = $r.AppendLine('')
+    }
+    $miActive = @($appSignIns | Where-Object { $_.IsManagedIdentity -eq 'True' -and $_.Status -eq 'ActiveInWindow' })
+    if ($miActive.Count -gt 0) {
+        $null = $r.AppendLine("- **$($miActive.Count) managed identities active in the window** - they belong to Azure resources and stay with the subscription (not tenant content).")
+    }
+    $msCount = @($appSignIns | Where-Object { $_.IsMicrosoftFirstParty -eq 'True' }).Count
+    if ($msCount -gt 0) {
+        $null = $r.AppendLine("- $msCount first-party Microsoft apps exist in every tenant - no action needed.")
+    }
+    $null = $r.AppendLine("- Sources: sign-in logs (beta, requires Entra ID P1) [Learn]($signInListDoc); service principal sign-in activity report (beta, **preview** - may include partial sign-ins and misclassify app-only activity) [Learn]($spActDoc).")
+    $null = $r.AppendLine('')
+    if ($invSummary -and $invSummary.signInLogsUnavailable -eq $true) {
+        $notInventoried.Add('Sign-in logs not available (Entra ID P1 required) - only the activity report was used')
+    } else {
+        $w = if ($invSummary -and $invSummary.appSignInWindowDays) { $invSummary.appSignInWindowDays } else { 30 }
+        $notInventoried.Add("App sign-in history older than $w days")
+    }
+} else {
+    $notInventoried.Add('Enterprise app usage not inventoried (AppSignInActivity.csv) - re-run inventory with the AppSignIns section')
+    if ($entApps.Count -gt 0) {
+        $null = $r.AppendLine("- $($entApps.Count) enterprise applications - usage not inventoried; recreate/re-consent in the target.")
+        $null = $r.AppendLine('')
+    }
+}
 
 # 6. Not inventoried ----------------------------------------------------------------
 

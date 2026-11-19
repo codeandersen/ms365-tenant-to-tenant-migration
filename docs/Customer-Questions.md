@@ -50,6 +50,7 @@ Ask these before estimating or promising anything. Grouped by phase.
   `-Exclude` lists)?
 - Any Conditional Access location policies that could block cutover-weekend admin work?
 - Guest users in either tenant that could collide with migrated addresses?
+- Which apps with no recorded sign-ins can be dropped instead of rebuilt in the target?
 
 ## DNS & logistics
 

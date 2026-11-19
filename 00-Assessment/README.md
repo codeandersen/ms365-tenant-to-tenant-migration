@@ -64,6 +64,21 @@ New/updated collections for the readiness report:
 | `Mailboxes.csv` | new columns `AutoExpandingArchiveEnabled`, `DisabledArchiveGuid` (falls back to `Get-Mailbox` if EXO doesn't return it), `ArchiveQuota`, `ArchiveWarningQuota`, `AuxArchiveCount` (`Get-MailboxLocation -MailboxLocationType AuxArchive`) | per-mailbox "does the archive come along" in `Readiness.md` |
 | `MailboxStatistics.csv` | new `AuxArchiveCount` column | aux archive count per archive-enabled mailbox |
 | `summary.json` | new metrics `autoExpandingArchiveCount`, `auxArchiveMailboxCount`, `disabledArchiveCount`, `orgAutoExpandingArchive` | archive overview |
+| `AppSignInActivity.csv` | new `AppSignIns` section (source role): last sign-in per type per service principal from the Entra sign-in logs (beta, ≤30 days via `-SignInLookbackDays`), plus the service principal sign-in activity report (beta, preview) | roles: Reports Reader / Security Reader / Global Reader; sign-in logs need Entra ID P1 - without it the section falls back to the activity report. [signIn-list](https://learn.microsoft.com/en-us/graph/api/signin-list?view=graph-rest-beta), [servicePrincipalSignInActivities](https://learn.microsoft.com/en-us/graph/api/reportroot-list-serviceprincipalsigninactivities?view=graph-rest-beta) |
+
+### Hand-over to the source admin: AppSignInActivity.csv
+
+Give this file to the source tenant admin so they can investigate each app before
+deciding what to rebuild. Columns: identity first (`ServicePrincipalId`, `AppId`,
+`DisplayName`, `ServicePrincipalType`, `IsMicrosoftFirstParty`,
+`IsManagedIdentity`, `AccountEnabled`, `PreferredSingleSignOnMode`), then `Status`,
+`LastSeenAny` and `DaysSinceLastSeen`, then the last sign-in per type
+(`LastInteractiveUser`, `LastNonInteractiveUser`, `LastServicePrincipal`,
+`LastManagedIdentity` - `n/a` where the type doesn't apply to the app) and the five
+last-activity dates from the preview report. `EntraPortalUrl` opens the app in the
+Entra portal for a closer look. `Status` values: `ActiveInWindow` (sign-in within
+the lookback window), `ActiveEarlier` (last activity predates the window),
+`NoActivityRecorded`, `Unknown` (neither source was reachable - e.g. no Entra ID P1).
 
 ## Requirements
 

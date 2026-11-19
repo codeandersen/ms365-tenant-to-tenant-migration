@@ -38,6 +38,15 @@
     then compares source domains and users against target and writes DomainConflicts.csv and
     UserMatches.csv.
 
+.PARAMETER SignInLookbackDays
+    How far back the AppSignIns section looks in the Entra sign-in logs (1-30 days,
+    default 30). Sign-in logs require Entra ID P1/P2 (30-day retention; Free keeps
+    7 days) and one of the roles Reports Reader, Security Reader or Global Reader
+    (permission AuditLog.Read.All - already requested). Without P1 the section
+    falls back to the service principal sign-in activity report (beta, preview).
+    https://learn.microsoft.com/en-us/graph/api/signin-list?view=graph-rest-beta
+    https://learn.microsoft.com/en-us/graph/api/reportroot-list-serviceprincipalsigninactivities?view=graph-rest-beta
+
 .PARAMETER TenantId
     Mandatory. Tenant ID (GUID) or a verified domain (e.g. contoso.com or
     contoso.onmicrosoft.com) of the tenant to collect from. Domains are resolved to a GUID
@@ -112,7 +121,10 @@ param(
     [switch]$NewWindow,
 
     [Parameter(DontShow)]
-    [switch]$ChildPauseOnError
+    [switch]$ChildPauseOnError,
+
+    [ValidateRange(1,30)]
+    [int]$SignInLookbackDays = 30
 )
 
 Set-StrictMode -Version 1
@@ -228,6 +240,102 @@ function Get-GraphAll {
         }
     }
     return $results.ToArray()
+}
+
+function Invoke-GraphFirst {
+    # One-request variant of Get-GraphAll: returns the first item of 'value' (or the
+    # response itself when it is not paged). Same 429/503 retry. Errors are rethrown.
+    param(
+        [Parameter(Mandatory)][string]$Uri,
+        [hashtable]$Headers,
+        [int]$MaxRetries = 5
+    )
+    $attempt = 0
+    while ($true) {
+        try {
+            $params = @{ Method = 'GET'; Uri = $Uri; OutputType = 'PSObject' }
+            if ($Headers) { $params['Headers'] = $Headers }
+            $resp = Invoke-MgGraphRequest @params
+            break
+        }
+        catch {
+            $attempt++
+            $status = $null
+            if ($_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode }
+            if (($status -eq 429 -or $status -eq 503) -and $attempt -le $MaxRetries) {
+                $retryAfter = 10
+                try {
+                    $ra = $_.Exception.Response.Headers['Retry-After']
+                    if ($ra) { $retryAfter = [int]($ra | Select-Object -First 1) }
+                } catch {}
+                Write-Log "Throttled ($status) on $Uri - waiting $retryAfter sec. (attempt $attempt/$MaxRetries)" -Level WARN
+                Start-Sleep -Seconds $retryAfter
+                continue
+            }
+            throw
+        }
+    }
+    if ($null -eq $resp) { return $null }
+    if ($resp.PSObject.Properties.Name -contains 'value') {
+        return @($resp.value)[0]
+    }
+    return $resp
+}
+
+function Test-GraphForbidden {
+    # True when a Graph error means "no access / no P1 licence" - distinct from other errors.
+    param([Parameter(Mandatory)]$Err)
+    $status = $null
+    try { if ($Err.Exception.Response) { $status = [int]$Err.Exception.Response.StatusCode } } catch {}
+    if ($status -eq 403) { return $true }
+    return ("$($Err.Exception.Message)" -match '(?i)Authentication_RequestFromNonPremiumTenantOrB2CTenant|license')
+}
+
+function Get-AppSignInStatus {
+    # Pure: status for one service principal.
+    #   ActiveInWindow     - a sign-in log hit in the window, or report activity inside the window
+    #   ActiveEarlier      - last activity (report) predates the window
+    #   NoActivityRecorded - sources available, nothing found
+    #   Unknown            - both sources unavailable
+    param(
+        [object[]]$LogDates,
+        [object]$LastReportDate,
+        [datetime]$WindowStart,
+        [switch]$LogsUnavailable,
+        [switch]$ReportUnavailable
+    )
+    if ($LogsUnavailable -and $ReportUnavailable) { return 'Unknown' }
+    if (-not $LogsUnavailable -and $LogDates -and @($LogDates).Count -gt 0) { return 'ActiveInWindow' }
+    if (-not $ReportUnavailable -and $LastReportDate) {
+        if ([datetime]$LastReportDate -ge $WindowStart) { return 'ActiveInWindow' }
+        return 'ActiveEarlier'
+    }
+    return 'NoActivityRecorded'
+}
+
+function Get-AppSignInQueryPlan {
+    # Pure: which (appId, eventType) sign-in log queries to run for the window.
+    # Candidates: apps with report activity on/after WindowStart - or every app when
+    # the activity report is unavailable. Managed identities are queried only for
+    # the 'managedIdentity' event type.
+    param(
+        [object[]]$ServicePrincipals,
+        [hashtable]$ActivityByAppId,
+        [datetime]$WindowStart,
+        [switch]$ReportUnavailable
+    )
+    $plan = [System.Collections.Generic.List[object]]::new()
+    foreach ($sp in $ServicePrincipals) {
+        $candidate = [bool]$ReportUnavailable
+        if (-not $candidate) {
+            $act = $ActivityByAppId[$sp.appId]
+            $candidate = ($act -and $act.LastActivityDate -and [datetime]$act.LastActivityDate -ge $WindowStart)
+        }
+        if (-not $candidate) { continue }
+        $types = if ($sp.IsManagedIdentity) { @('managedIdentity') } else { @('interactiveUser','nonInteractiveUser','servicePrincipal') }
+        foreach ($t in $types) { $plan.Add([pscustomobject]@{ AppId = $sp.appId; EventType = $t }) }
+    }
+    return $plan.ToArray()
 }
 
 function Get-GraphReport {
@@ -528,9 +636,10 @@ $script:SectionService = @{
     Usage       = 'Graph'
     Dns         = 'None'
     CrossTenant = 'Graph+EXO'
+    AppSignIns  = 'Graph'
 }
 
-$SourceSections = @('Tenant','Licenses','Users','Groups','Roles','Security','Apps','Exchange','Purview','OneDrive','SharePoint','Teams','Devices','Usage','Dns')
+$SourceSections = @('Tenant','Licenses','Users','Groups','Roles','Security','Apps','AppSignIns','Exchange','Purview','OneDrive','SharePoint','Teams','Devices','Usage','Dns')
 $TargetSections = @('Tenant','Licenses','Users','CrossTenant','TargetExchange')
 
 # ---------- Source sections ----------
@@ -887,6 +996,143 @@ function Invoke-Apps {
         $grants = Get-GraphAll -Uri 'https://graph.microsoft.com/v1.0/oauth2PermissionGrants?$select=clientId'
         $script:Summary.metrics.oauth2GrantClients = @($grants | Group-Object clientId).Count
     } catch {}
+}
+
+function Invoke-AppSignIns {
+    # Last sign-in per type for every service principal (incl. first-party and
+    # managed identities), from the Entra sign-in logs (beta) plus the service
+    # principal sign-in activity report (preview). Source role only.
+    $windowStart    = [datetime]::UtcNow.AddDays(-$SignInLookbackDays)
+    $windowStartIso = $windowStart.ToString('o')
+    $script:Summary.metrics.appSignInWindowDays = $SignInLookbackDays
+
+    # 1. All service principals
+    $sps = Get-GraphAll -Uri "https://graph.microsoft.com/v1.0/servicePrincipals?`$select=id,appId,displayName,servicePrincipalType,appOwnerOrganizationId,accountEnabled,preferredSingleSignOnMode,tags&`$top=999"
+    $spList = @(foreach ($sp in $sps) {
+        [pscustomobject]@{
+            id                        = $sp.id
+            appId                     = $sp.appId
+            displayName               = $sp.displayName
+            ServicePrincipalType      = "$($sp.servicePrincipalType)"
+            IsMicrosoftFirstParty     = ("$($sp.appOwnerOrganizationId)" -eq $script:MicrosoftTenantId)
+            IsManagedIdentity         = ("$($sp.servicePrincipalType)" -eq 'ManagedIdentity')
+            AccountEnabled            = $sp.accountEnabled
+            PreferredSingleSignOnMode = "$($sp.preferredSingleSignOnMode)"
+        }
+    })
+
+    # 2. Activity report (beta, preview) - last activity ever per app
+    $reportUnavailable = $false
+    $actMap = @{}
+    try {
+        $acts = Get-GraphAll -Uri 'https://graph.microsoft.com/beta/reports/servicePrincipalSignInActivities'
+        foreach ($a in $acts) {
+            $d1 = "$($a.lastSignInActivity.lastSignInDateTime)"
+            $d2 = "$($a.delegatedClientSignInActivity.lastSignInDateTime)"
+            $d3 = "$($a.delegatedResourceSignInActivity.lastSignInDateTime)"
+            $d4 = "$($a.applicationAuthenticationClientSignInActivity.lastSignInDateTime)"
+            $d5 = "$($a.applicationAuthenticationResourceSignInActivity.lastSignInDateTime)"
+            $latest = @(@($d1, $d2, $d3, $d4, $d5) | Where-Object { $_ } | ForEach-Object { [datetime]$_ } | Sort-Object -Descending | Select-Object -First 1)
+            if ($latest.Count -gt 0) { $latest = $latest[0] } else { $latest = $null }
+            $actMap[$a.appId] = [pscustomobject]@{
+                LastActivityReport    = $d1
+                LastDelegatedClient   = $d2
+                LastDelegatedResource = $d3
+                LastAppOnlyClient     = $d4
+                LastAppOnlyResource   = $d5
+                LastActivityDate      = $latest
+            }
+        }
+    } catch {
+        if (Test-GraphForbidden $_) {
+            Write-Log "servicePrincipalSignInActivities not accessible (403/no licence) - continuing without the activity report." -Level WARN
+            $reportUnavailable = $true
+        } else { throw }
+    }
+    $script:Summary.metrics.spSignInActivityUnavailable = $reportUnavailable
+
+    # 3. Sign-in logs per type, only for candidates
+    $logsUnavailable = $false
+    $lastByType = @{}
+    $plan = Get-AppSignInQueryPlan -ServicePrincipals $spList -ActivityByAppId $actMap -WindowStart $windowStart -ReportUnavailable:$reportUnavailable
+    $byApp = @($plan | Group-Object AppId)
+    $i = 0
+    :apps foreach ($g in $byApp) {
+        if ($logsUnavailable) { break }
+        $i++
+        if (($i % 50) -eq 0) { Write-Log "  App sign-in logs $i/$($byApp.Count)" }
+        foreach ($q in $g.Group) {
+            $uri = "https://graph.microsoft.com/beta/auditLogs/signIns?`$filter=appId eq '$($q.AppId)' and createdDateTime ge $windowStartIso and signInEventTypes/any(t: t eq '$($q.EventType)')&`$top=1&`$select=createdDateTime"
+            try {
+                $hit = Invoke-GraphFirst -Uri $uri
+                if ($hit -and $hit.createdDateTime) {
+                    if (-not $lastByType[$q.AppId]) { $lastByType[$q.AppId] = @{} }
+                    $lastByType[$q.AppId][$q.EventType] = [datetime]$hit.createdDateTime
+                }
+            } catch {
+                if (Test-GraphForbidden $_) {
+                    Write-Log "Sign-in logs not accessible (403/no licence - Entra ID P1 required). Remaining queries skipped." -Level WARN
+                    $logsUnavailable = $true
+                    break apps
+                }
+                Write-Log "Sign-in query failed for appId $($q.AppId) ($($q.EventType)): $($_.Exception.Message)" -Level WARN
+            }
+        }
+    }
+    $script:Summary.metrics.signInLogsUnavailable = $logsUnavailable
+
+    # 4. Write AppSignInActivity.csv (no user names stored)
+    $rows = foreach ($sp in $spList) {
+        $lt  = $lastByType[$sp.appId]
+        $act = $actMap[$sp.appId]
+        $mi  = $sp.IsManagedIdentity
+        $fmt = { param($d) if ($d) { ([datetime]$d).ToUniversalTime().ToString('o') } else { '' } }
+        $lInt = if ($mi) { 'n/a' } elseif ($lt -and $lt['interactiveUser'])     { & $fmt $lt['interactiveUser'] }     else { '' }
+        $lNon = if ($mi) { 'n/a' } elseif ($lt -and $lt['nonInteractiveUser'])  { & $fmt $lt['nonInteractiveUser'] }  else { '' }
+        $lSpn = if ($mi) { 'n/a' } elseif ($lt -and $lt['servicePrincipal'])    { & $fmt $lt['servicePrincipal'] }    else { '' }
+        $lMi  = if (-not $mi) { 'n/a' } elseif ($lt -and $lt['managedIdentity']) { & $fmt $lt['managedIdentity'] }    else { '' }
+        $logDates = @()
+        if ($lt) { $logDates = @($lt.Values) }
+        $repDates = @()
+        $maxRep = $null
+        if ($act) {
+            $repDates = @($act.LastActivityReport, $act.LastDelegatedClient, $act.LastDelegatedResource, $act.LastAppOnlyClient, $act.LastAppOnlyResource | Where-Object { $_ } | ForEach-Object { [datetime]$_ })
+            $maxRep = $act.LastActivityDate
+        }
+        $all = @($logDates) + @($repDates)
+        $lastSeen = $null
+        if ($all.Count -gt 0) { $lastSeen = @($all | Sort-Object -Descending | Select-Object -First 1)[0] }
+        $status = Get-AppSignInStatus -LogDates $logDates -LastReportDate $maxRep -WindowStart $windowStart -LogsUnavailable:$logsUnavailable -ReportUnavailable:$reportUnavailable
+        [pscustomobject]@{
+            ServicePrincipalId       = $sp.id
+            AppId                    = $sp.appId
+            DisplayName              = $sp.displayName
+            ServicePrincipalType     = $sp.ServicePrincipalType
+            IsMicrosoftFirstParty    = $sp.IsMicrosoftFirstParty
+            IsManagedIdentity        = $sp.IsManagedIdentity
+            AccountEnabled           = $sp.AccountEnabled
+            PreferredSingleSignOnMode= $sp.PreferredSingleSignOnMode
+            Status                   = $status
+            LastSeenAny              = if ($lastSeen) { & $fmt $lastSeen } else { '' }
+            DaysSinceLastSeen        = if ($lastSeen) { [int]([datetime]::UtcNow - $lastSeen).TotalDays } else { '' }
+            LastInteractiveUser      = $lInt
+            LastNonInteractiveUser   = $lNon
+            LastServicePrincipal     = $lSpn
+            LastManagedIdentity      = $lMi
+            LastActivityReport       = if ($act) { & $fmt $act.LastActivityReport } else { '' }
+            LastDelegatedClient      = if ($act) { & $fmt $act.LastDelegatedClient } else { '' }
+            LastDelegatedResource    = if ($act) { & $fmt $act.LastDelegatedResource } else { '' }
+            LastAppOnlyClient        = if ($act) { & $fmt $act.LastAppOnlyClient } else { '' }
+            LastAppOnlyResource      = if ($act) { & $fmt $act.LastAppOnlyResource } else { '' }
+            EntraPortalUrl           = "https://entra.microsoft.com/#view/Microsoft_AAD_IAM/ManagedAppMenuBlade/~/Overview/objectId/$($sp.id)/appId/$($sp.appId)"
+        }
+    }
+    Export-CsvSafe -Data $rows -Name 'AppSignInActivity.csv'
+
+    # 5. Metrics
+    foreach ($g in (@($rows) | Group-Object Status)) { $script:Summary.metrics["appStatus_$($g.Name)"] = $g.Count }
+    $script:Summary.metrics.appsActiveInWindowNonMicrosoft    = @($rows | Where-Object { $_.Status -eq 'ActiveInWindow' -and -not $_.IsMicrosoftFirstParty }).Count
+    $script:Summary.metrics.managedIdentitiesActiveInWindow   = @($rows | Where-Object { $_.Status -eq 'ActiveInWindow' -and $_.IsManagedIdentity }).Count
 }
 
 function Invoke-Exchange {
@@ -1772,6 +2018,7 @@ $sectionFunctions = @{
     Roles       = { Invoke-Roles }
     Security    = { Invoke-Security }
     Apps        = { Invoke-Apps }
+    AppSignIns  = { Invoke-AppSignIns }
     Exchange    = { Invoke-Exchange }
     Purview     = { Invoke-Purview }
     OneDrive    = { Invoke-OneDrive }
@@ -1787,7 +2034,7 @@ $sectionFunctions = @{
 
 # Sections distributed across service groups (process isolation due to MSAL conflicts)
 $groupSections = @{
-    Graph      = @('Tenant','Licenses','Users','Groups','Roles','Security','Apps','Teams','Devices','Usage','CrossTenant')
+    Graph      = @('Tenant','Licenses','Users','Groups','Roles','Security','Apps','AppSignIns','Teams','Devices','Usage','CrossTenant')
     Exchange   = @('Exchange','Purview','TargetExchange')
     SharePoint = @('OneDrive','SharePoint')
     Teams      = @('TeamsPhone')
