@@ -1,3 +1,7 @@
+﻿# Variables set in BeforeAll are used inside It blocks; PSScriptAnalyzer cannot see Pester scoping.
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseDeclaredVarsMoreThanAssignments', '')]
+param()
+
 BeforeAll {
     $repo = (Resolve-Path "$PSScriptRoot\..").Path
     Import-Module "$repo\tools\Orchestrator.psm1" -Force
