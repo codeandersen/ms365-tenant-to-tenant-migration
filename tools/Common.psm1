@@ -258,6 +258,47 @@ function Connect-MigrationSharePoint {
     Connect-SPOService -Url $AdminUrl
 }
 
+function Connect-MigrationCompliance {
+    <#
+    .SYNOPSIS
+        Connects to Security & Compliance PowerShell (IPPS) for a migration session and asserts the tenant.
+
+    .DESCRIPTION
+        Runs Connect-IPPSSession -UserPrincipalName, then asserts the tenant context. IPPS sessions
+        appear in Get-ConnectionInformation alongside the EXO one; the newest connection's TenantID
+        is asserted against -TenantId. If the connection object does not expose TenantID in this
+        environment, the guard logs a warning instead of silently trusting the session.
+
+    .PARAMETER TenantId
+        Expected tenant ID (GUID).
+
+    .PARAMETER AdminUpn
+        Admin account to sign in with (-UserPrincipalName).
+
+    .EXAMPLE
+        Connect-MigrationCompliance -TenantId 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' -AdminUpn 'admin@contoso.com'
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateScript({ [guid]::TryParse($_, [ref][guid]::Empty) })]
+        [string]$TenantId,
+
+        [Parameter(Mandatory)]
+        [string]$AdminUpn
+    )
+
+    Connect-IPPSSession -UserPrincipalName $AdminUpn -ShowBanner:$false
+    $conn = @(Get-ConnectionInformation | Where-Object State -eq 'Connected' | Select-Object -Last 1)
+    if ($conn -and "$($conn[0].TenantID)") {
+        Assert-TenantContext -ExpectedTenantId $TenantId -ActualTenantId "$($conn[0].TenantID)" -ExpectedUpn $AdminUpn
+    }
+    else {
+        Write-Warning "Could not read TenantID from the IPPS connection - verify the compliance session is in tenant $TenantId before relying on its output."
+    }
+    return $conn
+}
+
 function Export-CsvSafe {
     <#
     .SYNOPSIS
@@ -277,8 +318,15 @@ function Export-CsvSafe {
     .PARAMETER Delimiter
         CSV delimiter. Default ',' - the same delimiter Collect-TenantInventory.ps1 uses.
 
+    .PARAMETER Header
+        Column names written as a header-only file when there is no input. Lets a report
+        produce an empty-but-valid CSV ("nothing found") instead of a zero-byte file.
+
     .EXAMPLE
         $rows | Export-CsvSafe -Path .\out\Users.csv
+
+    .EXAMPLE
+        $rows | Export-CsvSafe -Path .\out\FolderPermissions.csv -Header 'Mailbox','Folder','User','AccessRights'
     #>
     [CmdletBinding()]
     param(
@@ -288,7 +336,9 @@ function Export-CsvSafe {
         [Parameter(Mandatory, Position = 0)]
         [string]$Path,
 
-        [string]$Delimiter = ','
+        [string]$Delimiter = ',',
+
+        [string[]]$Header
     )
 
     begin { $buffer = [System.Collections.Generic.List[object]]::new() }
@@ -296,7 +346,15 @@ function Export-CsvSafe {
     end {
         $dir = Split-Path -Parent $Path
         if ($dir -and -not (Test-Path $dir)) { $null = New-Item -ItemType Directory -Path $dir -Force }
-        $buffer | Export-Csv -Path $Path -NoTypeInformation -Encoding utf8BOM -Delimiter $Delimiter
+        if ($buffer.Count) {
+            $buffer | Export-Csv -Path $Path -NoTypeInformation -Encoding utf8BOM -Delimiter $Delimiter
+        }
+        elseif ($Header) {
+            [System.IO.File]::WriteAllText($Path, ($Header -join $Delimiter) + "`r`n", [System.Text.UTF8Encoding]::new($true))
+        }
+        else {
+            $buffer | Export-Csv -Path $Path -NoTypeInformation -Encoding utf8BOM -Delimiter $Delimiter
+        }
     }
 }
 
@@ -381,4 +439,4 @@ function New-OutputFolder {
     return $path
 }
 
-Export-ModuleMember -Function Assert-TenantContext, Connect-MigrationGraph, Connect-MigrationExchange, Connect-MigrationTeams, Connect-MigrationSharePoint, Get-TenantIdFromDomain, ConvertFrom-OpenIdIssuer, Export-CsvSafe, Write-Log, New-OutputFolder
+Export-ModuleMember -Function Assert-TenantContext, Connect-MigrationGraph, Connect-MigrationExchange, Connect-MigrationTeams, Connect-MigrationSharePoint, Connect-MigrationCompliance, Get-TenantIdFromDomain, ConvertFrom-OpenIdIssuer, Export-CsvSafe, Write-Log, New-OutputFolder

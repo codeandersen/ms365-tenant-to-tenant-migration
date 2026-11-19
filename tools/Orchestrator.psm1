@@ -111,6 +111,12 @@ function Import-MigrationUserList {
             try { $null = ConvertTo-WorkloadList -Workloads $r.Workloads } catch { $problems.Add("$where : $($_.Exception.Message)") }
         }
         else { $problems.Add("$where : empty Workloads") }
+        # Optional phase-09 columns: when present they must look like addresses on the moving domain.
+        foreach ($c in 'FinalUpn', 'FinalPrimarySmtp') {
+            $prop = $r.PSObject.Properties[$c]
+            $v = if ($prop) { "$($prop.Value)".Trim() } else { '' }
+            if ($v -and $v -notmatch '^[^@\s]+@[^@\s]+\.[^@\s]+$') { $problems.Add("$where : $c '$v' is not a valid address") }
+        }
     }
     if ($problems.Count) { throw "$Path failed validation:`n - " + ($problems -join "`n - ") }
     return $rows
@@ -432,5 +438,86 @@ function Select-LicensableUser {
     return [pscustomobject]@{ Licensable = [object[]]$licensable; Refused = [object[]]$refused }
 }
 
+function Resolve-PermissionTrustee {
+    <#
+    .SYNOPSIS
+        Pure helper: resolves a source trustee address to its target identity via a mapping table.
+
+    .DESCRIPTION
+        Used by the permission and mail-config scripts: a trustee is only ever resolved through the
+        explicit mapping file (source SMTP -> target identity), never guessed by name. Returns the
+        mapped target string, 'external:<x>' / 'unresolved:<x>' markers passed through untouched
+        (callers skip them), and $null when there is no mapping so callers can report the row
+        unmapped instead of inventing one.
+
+    .PARAMETER Trustee
+        Source trustee identifier as exported (SMTP address, or a marker like 'unresolved:<id>').
+
+    .PARAMETER Mapping
+        Hashtable of source addresses (any case) -> target identity.
+
+    .EXAMPLE
+        Resolve-PermissionTrustee -Trustee 'anne@contoso.com' -Mapping @{ 'anne@contoso.com' = 'anne@fabrikam.onmicrosoft.com' }
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Trustee,
+        [Parameter(Mandatory)][hashtable]$Mapping
+    )
+    $t = $Trustee.Trim()
+    if ($t -match '^(external|unresolved|orphan):') { return $t }
+    if ($t -in 'Default', 'Anonymous', 'SELF') { return $t }
+    $hit = $Mapping[$t.ToLower()]
+    if ($hit) { return $hit }
+    return $null
+}
+
+function ConvertFrom-InPlaceHold {
+    <#
+    .SYNOPSIS
+        Pure helper: decodes Exchange Online InPlaceHolds entry prefixes into a readable hold source.
+
+    .DESCRIPTION
+        Get-Mailbox.InPlaceHolds entries are <prefix><guid>. The documented prefixes (Exchange
+        Online "identify holds" guidance):
+          UniH  - eDiscovery case hold or retention policy hold (unified hold)
+          mbx   - In-Place Hold / mailbox search
+          skp   - Skype for Business / Teams conversation hold
+          grp   - Microsoft 365 Group hold
+          cld   - cloud app / other cloud location hold
+          exa   - eDiscovery hold GUID form
+        Anything else is reported as Unknown rather than guessed.
+
+    .PARAMETER InPlaceHolds
+        One or more InPlaceHolds entries (e.g. 'UniH1234abcd...' or 'mbx8765').
+
+    .EXAMPLE
+        ConvertFrom-InPlaceHold -InPlaceHolds 'UniH12345678-90ab-cdef-1234-567890abcdef'
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter()][AllowNull()][AllowEmptyCollection()][string[]]$InPlaceHolds
+    )
+    $map = [ordered]@{
+        'UniH' = 'eDiscovery case or retention policy (unified hold)'
+        'mbx'  = 'In-Place Hold / mailbox search'
+        'skp'  = 'Skype for Business / Teams conversation hold'
+        'grp'  = 'Microsoft 365 group hold'
+        'cld'  = 'cloud location hold'
+        'exa'  = 'eDiscovery hold'
+    }
+    $out = [System.Collections.Generic.List[object]]::new()
+    foreach ($h in @($InPlaceHolds | Where-Object { $_ })) {
+        $prefix = if ($h -match '^(UniH|mbx|skp|grp|cld|exa)') { $Matches[1] } else { $null }
+        $out.Add([pscustomobject]@{
+            HoldId = $h
+            Prefix = $(if ($prefix) { $prefix } else { '' })
+            Source = $(if ($prefix) { $map[$prefix] } else { 'Unknown hold type - decode by hand' })
+        })
+    }
+    return $out.ToArray()
+}
+
 Export-ModuleMember -Function Import-MigrationUserList, ConvertTo-WorkloadList, Split-MigrationBatch,
-    ConvertTo-CrossTenantMigrationJobBody, Test-ValidationFresh, Compare-MigrationIdentity, Select-LicensableUser, Get-GraphValue
+    ConvertTo-CrossTenantMigrationJobBody, Test-ValidationFresh, Compare-MigrationIdentity, Select-LicensableUser, Get-GraphValue,
+    Resolve-PermissionTrustee, ConvertFrom-InPlaceHold

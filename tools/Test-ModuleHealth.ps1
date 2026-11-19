@@ -219,7 +219,7 @@ if ($Fix) {
 
 # ------------------------------------------------------------ report
 $results | Format-Table Result, Area, Item, Detail -AutoSize -Wrap | Out-String -Width 250 | Write-Host
-if ($OutFile) { $results | Export-Csv $OutFile -NoTypeInformation -WhatIf:$false; Write-Host "Saved to $OutFile" -ForegroundColor Cyan }
+if ($OutFile) { $results | Export-CsvSafe -Path $OutFile; Write-Host "Saved to $OutFile" -ForegroundColor Cyan }
 $warn = @($results | Where-Object Result -eq 'WARN').Count
 if ($warn) { Write-Host "$warn warning(s). Fix them before a migration run, or expect assembly errors part way through." -ForegroundColor Yellow }
 else { Write-Host 'All PASS.' -ForegroundColor Green }

@@ -1,6 +1,6 @@
-SourceUpn,SourcePrimarySmtp,DisplayName,FirstName,LastName,TargetUpn,TargetPrimarySmtp,UsageLocation,TargetLicenseSku,Batch,CompleteAfterDateTimeUtc,Workloads
-alex.wilber@contoso.com,alex.wilber@contoso.com,Alex Wilber,Alex,Wilber,alex.wilber@fabrikam.onmicrosoft.com,alex.wilber@fabrikam.onmicrosoft.com,DK,SPE_E5,wave1,2026-09-05T22:00:00Z,Exchange;ODSP;Teams;Meeting
-soren.skou@contoso.com,soren.skou@contoso.com,Søren Skou,Søren,Skou,soren.skou@fabrikam.onmicrosoft.com,soren.skou@fabrikam.onmicrosoft.com,DK,SPE_E5,wave1,2026-09-05T22:00:00Z,Exchange;ODSP;Teams;Meeting
-megan.bowen@contoso.com,megan.bowen@contoso.com,Megan Bowen,Megan,Bowen,megan.bowen@fabrikam.onmicrosoft.com,megan.bowen@fabrikam.onmicrosoft.com,DK,SPE_E5,wave1,2026-09-05T22:00:00Z,Exchange;ODSP;Teams;Meeting
-diego.siciliani@contoso.com,diego.siciliani@contoso.com,Diego Siciliani,Diego,Siciliani,diego.siciliani@fabrikam.onmicrosoft.com,diego.siciliani@fabrikam.onmicrosoft.com,DK,SPE_E5,wave2,2026-09-12T22:00:00Z,Exchange;ODSP;Teams;Meeting
-lee.gu@contoso.com,lee.gu@contoso.com,Lee Gu,Lee,Gu,lee.gu@fabrikam.onmicrosoft.com,lee.gu@fabrikam.onmicrosoft.com,DK,SPE_E5,wave2,2026-09-12T22:00:00Z,Exchange;ODSP;Teams;Meeting
+SourceUpn,SourcePrimarySmtp,DisplayName,FirstName,LastName,TargetUpn,TargetPrimarySmtp,UsageLocation,TargetLicenseSku,Batch,CompleteAfterDateTimeUtc,Workloads,FinalUpn,FinalPrimarySmtp
+alex.wilber@contoso.com,alex.wilber@contoso.com,Alex Wilber,Alex,Wilber,alex.wilber@fabrikam.onmicrosoft.com,alex.wilber@fabrikam.onmicrosoft.com,DK,SPE_E5,wave1,2026-09-05T22:00:00Z,Exchange;ODSP;Teams;Meeting,alex.wilber@fabrikam.com,alex.wilber@fabrikam.com
+soren.skou@contoso.com,soren.skou@contoso.com,Søren Skou,Søren,Skou,soren.skou@fabrikam.onmicrosoft.com,soren.skou@fabrikam.onmicrosoft.com,DK,SPE_E5,wave1,2026-09-05T22:00:00Z,Exchange;ODSP;Teams;Meeting,,
+megan.bowen@contoso.com,megan.bowen@contoso.com,Megan Bowen,Megan,Bowen,megan.bowen@fabrikam.onmicrosoft.com,megan.bowen@fabrikam.onmicrosoft.com,DK,SPE_E5,wave1,2026-09-05T22:00:00Z,Exchange;ODSP;Teams;Meeting,,
+diego.siciliani@contoso.com,diego.siciliani@contoso.com,Diego Siciliani,Diego,Siciliani,diego.siciliani@fabrikam.onmicrosoft.com,diego.siciliani@fabrikam.onmicrosoft.com,DK,SPE_E5,wave2,2026-09-12T22:00:00Z,Exchange;ODSP;Teams;Meeting,,
+lee.gu@contoso.com,lee.gu@contoso.com,Lee Gu,Lee,Gu,lee.gu@fabrikam.onmicrosoft.com,lee.gu@fabrikam.onmicrosoft.com,DK,SPE_E5,wave2,2026-09-12T22:00:00Z,Exchange;ODSP;Teams;Meeting,,

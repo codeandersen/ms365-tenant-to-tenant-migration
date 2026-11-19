@@ -15,6 +15,16 @@ This repository incorporates code adapted from the following upstream project.
 | `tools/Test-ModuleHealth.ps1`                | `tools/Test-ModuleHealth.ps1`        | adapted |
 | `tools/Get-MigrationReport.ps1`              | `tools/Get-MigrationReport.ps1`      | adapted |
 | `copy-options/A-Microsoft-native/New-TargetMailUsers.ps1` | `03-Identities/New-TargetMailUsers.ps1` | adapted |
+| `copy-options/A-Microsoft-native/New-TargetMailUsers.ps1` | `06-SharedMailboxes-Holds/New-SharedMailboxMailUsers.ps1` | adapted |
+| `05-MailConfig/Copy-MailConfig.ps1`              | `08-MailConfig/Copy-MailConfig.ps1`    | adapted |
+| `07-DomainCutover/Export-DomainDns.ps1`          | `09-DomainCutover/Export-DomainDns.ps1` | adapted |
+| `07-DomainCutover/Set-DomainDnsRecords.ps1`      | `09-DomainCutover/Set-DomainDnsRecords.ps1` | adapted |
+| `07-DomainCutover/Add-TargetDomain.ps1`          | `09-DomainCutover/Add-TargetDomain.ps1` | adapted |
+| `07-DomainCutover/Remove-SourceDomain.ps1`       | `09-DomainCutover/Remove-SourceDomain.ps1` | adapted |
+| `07-DomainCutover/Clear-DeletedUserDomain.ps1`   | `09-DomainCutover/Clear-DeletedUserDomain.ps1` | adapted |
+| `07-DomainCutover/Test-CutoverReadiness.ps1`     | `09-DomainCutover/Test-CutoverReadiness.ps1` | adapted |
+| `07-DomainCutover/Switch-TargetAddresses.ps1`    | `09-DomainCutover/Switch-TargetAddresses.ps1` | adapted |
+| `07-DomainCutover/Block-SourceSignIn.ps1`        | `09-DomainCutover/Block-SourceSignIn.ps1` | adapted |
 
 Each adapted file carries a header noting the adaptation and a short list of
 the changes made.
