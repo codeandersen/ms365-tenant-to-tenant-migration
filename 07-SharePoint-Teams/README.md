@@ -92,6 +92,19 @@ Note: the headless-browser flags must be passed from **PowerShell** (or cmd) —
 Learn: [list channel messages](https://learn.microsoft.com/en-us/graph/api/channel-list-messages),
 [hosting images in Teams messages](https://learn.microsoft.com/en-us/microsoftteams/platform/messaging-extensions/how-to/action-commands/respond-to-task-module-submit),
 [chats/channels don't migrate natively](https://learn.microsoft.com/en-us/microsoft-365/migration/cross-tenant-sharepoint-migration).
+
+> **Note - search indexing of the exported PDFs.** A PDF placed in a Teams channel (the
+> channel's folder in the team's SharePoint document library) is full-text indexed by
+> SharePoint search, subject to these limits ([Search limits for SharePoint](https://learn.microsoft.com/en-us/sharepoint/search-limits)):
+> crawl download max 512 MB for PDF (above that only metadata is indexed); parsing stops at
+> 2 million characters; only the first 1 million characters are broken into searchable words;
+> max 30 seconds per item for parsing and for word breaking. Text in the exported PDFs is
+> searchable; embedded images are not (no OCR unless enabled). A channel with long history can
+> exceed 1 million characters in one PDF - threads are ordered oldest first, so the newest
+> history would not be searchable. During the pilot: check the PDF sizes, search for a phrase
+> from the end of a large PDF after it has been indexed, and record the result in the
+> Decision-Log. Splitting PDFs per year is a possible later change if this becomes a problem.
+
 *Untested against live tenants — mock-verified only.*
 
 ## What does NOT move (either track, native-specific where noted)

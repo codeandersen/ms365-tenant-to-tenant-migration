@@ -35,3 +35,17 @@ pilot before go-live. Fill the Result column per run.
 | 27 | A PDF archive of channel conversations is readable and complete enough to be the record | [Hypothesis - test] | Pick 2-3 pilot teams incl. a private channel + a channel with images/long threads; run `07 Export-TeamsChannelsToPdf.ps1`; hand the PDFs + `TeamsExportCoverage.md` to the source admin; admin judges readability/completeness, compares history span with live Teams; record the archive-vs-import decision in `Decision-Log.md` | |
 | 28 | Pilot users' first sign-in works under the target's Conditional Access | [Hypothesis - test] | Sign in a pilot user on a new PC before/after ESP completes if a device-compliance policy exists; test a location-based CA policy with and without the trusted locations imported; try a legacy-auth client if blocking is configured; check mobile app-protection requirements | |
 | 29 | MFA re-registration in the target works at first sign-in (TAP if used) | [Hypothesis - test] | Pilot user registers MFA in the target; if TAP is enabled, verify the help-desk TAP flow | |
+
+### Notes for item 27
+
+> **Note - search indexing of the exported PDFs.** A PDF placed in a Teams channel (the
+> channel's folder in the team's SharePoint document library) is full-text indexed by
+> SharePoint search, subject to these limits ([Search limits for SharePoint](https://learn.microsoft.com/en-us/sharepoint/search-limits)):
+> crawl download max 512 MB for PDF (above that only metadata is indexed); parsing stops at
+> 2 million characters; only the first 1 million characters are broken into searchable words;
+> max 30 seconds per item for parsing and for word breaking. Text in the exported PDFs is
+> searchable; embedded images are not (no OCR unless enabled). A channel with long history can
+> exceed 1 million characters in one PDF - threads are ordered oldest first, so the newest
+> history would not be searchable. During the pilot: check the PDF sizes, search for a phrase
+> from the end of a large PDF after it has been indexed, and record the result in the
+> Decision-Log. Splitting PDFs per year is a possible later change if this becomes a problem.
