@@ -284,10 +284,12 @@ function Get-GraphAll {
 function Invoke-GraphFirst {
     # One-request variant of Get-GraphAll: returns the first item of 'value' (or the
     # response itself when it is not paged). Same 429/503 retry. Errors are rethrown.
+    # -Context names the caller in the throttle WARN (e.g. "Contoso CRM / nonInteractiveUser").
     param(
         [Parameter(Mandatory)][string]$Uri,
         [hashtable]$Headers,
-        [int]$MaxRetries = 5
+        [int]$MaxRetries = 5,
+        [string]$Context
     )
     $attempt = 0
     while ($true) {
@@ -307,7 +309,8 @@ function Invoke-GraphFirst {
                     $ra = $_.Exception.Response.Headers['Retry-After']
                     if ($ra) { $retryAfter = [int]($ra | Select-Object -First 1) }
                 } catch {}
-                Write-Log "Throttled ($status) on $Uri - waiting $retryAfter sec. (attempt $attempt/$MaxRetries)" -Level WARN
+                $target = if ($Context) { $Context } else { $Uri }
+                Write-Log "Throttled ($status) on $target - waiting $retryAfter sec. (attempt $attempt/$MaxRetries)" -Level WARN
                 Start-Sleep -Seconds $retryAfter
                 continue
             }
@@ -375,6 +378,14 @@ function Get-AppSignInQueryPlan {
         foreach ($t in $types) { $plan.Add([pscustomobject]@{ AppId = $sp.appId; EventType = $t }) }
     }
     return $plan.ToArray()
+}
+
+function Get-AppSignInEta {
+    # Pure: remaining-time estimate for the per-app sign-in log loop.
+    # Average seconds per app so far x apps left; $null until at least 3 apps are done.
+    param([int]$Done, [int]$Total, [timespan]$Elapsed)
+    if ($Done -lt 3 -or $Done -ge $Total -or $Elapsed.TotalSeconds -le 0) { return $null }
+    return [timespan]::FromSeconds($Elapsed.TotalSeconds / $Done * ($Total - $Done))
 }
 
 function Get-GraphReport {
@@ -1112,8 +1123,10 @@ function Invoke-AppSignIns {
     $windowStart    = [datetime]::UtcNow.AddDays(-$SignInLookbackDays)
     $windowStartIso = $windowStart.ToString('o')
     $script:Summary.metrics.appSignInWindowDays = $SignInLookbackDays
+    $fmtN = { param($n) ([int]$n).ToString('N0', [System.Globalization.CultureInfo]::InvariantCulture) }
 
     # 1. All service principals
+    Write-Log 'AppSignIns 1/4: listing service principals...'
     $sps = Get-GraphAll -Uri "https://graph.microsoft.com/v1.0/servicePrincipals?`$select=id,appId,displayName,servicePrincipalType,appOwnerOrganizationId,accountEnabled,preferredSingleSignOnMode,tags&`$top=999"
     $spList = @(foreach ($sp in $sps) {
         [pscustomobject]@{
@@ -1127,8 +1140,11 @@ function Invoke-AppSignIns {
             PreferredSingleSignOnMode = "$($sp.preferredSingleSignOnMode)"
         }
     })
+    Write-Log ("  {0} service principals ({1} Microsoft first-party, {2} managed identities)" -f
+        (& $fmtN $spList.Count), (& $fmtN @($spList | Where-Object IsMicrosoftFirstParty).Count), (& $fmtN @($spList | Where-Object IsManagedIdentity).Count))
 
     # 2. Activity report (beta, preview) - last activity ever per app
+    Write-Log 'AppSignIns 2/4: reading service principal sign-in activity report (preview)...'
     $reportUnavailable = $false
     $actMap = @{}
     try {
@@ -1150,6 +1166,7 @@ function Invoke-AppSignIns {
                 LastActivityDate      = $latest
             }
         }
+        Write-Log ("  activity for {0} apps" -f (& $fmtN $actMap.Count))
     } catch {
         if (Test-GraphForbidden $_) {
             Write-Log "servicePrincipalSignInActivities not accessible (403/no licence) - continuing without the activity report." -Level WARN
@@ -1163,32 +1180,71 @@ function Invoke-AppSignIns {
     $lastByType = @{}
     $plan = Get-AppSignInQueryPlan -ServicePrincipals $spList -ActivityByAppId $actMap -WindowStart $windowStart -ReportUnavailable:$reportUnavailable
     $byApp = @($plan | Group-Object AppId)
+    $skippedApps = $spList.Count - $byApp.Count
+    if ($reportUnavailable) {
+        Write-Log ("AppSignIns 3/4: sign-in logs - all {0} apps (activity report unavailable), {1} queries planned" -f (& $fmtN $spList.Count), (& $fmtN $plan.Count))
+    } else {
+        Write-Log ("AppSignIns 3/4: sign-in logs for apps active since {0} - {1} of {2} apps, {3} queries planned ({4} apps skipped: no activity in the window)" -f
+            $windowStart.ToString('yyyy-MM-dd'), (& $fmtN $byApp.Count), (& $fmtN $spList.Count), (& $fmtN $plan.Count), (& $fmtN $skippedApps))
+    }
+    $spInfo = @{}
+    foreach ($sp in $spList) { $spInfo[$sp.appId] = $sp }
+    $evLabel = @{ interactiveUser = 'interactive'; nonInteractiveUser = 'non-interactive'; servicePrincipal = 'service principal'; managedIdentity = 'managed identity' }
     $i = 0
+    $totalSw = [System.Diagnostics.Stopwatch]::StartNew()
+    try {
     :apps foreach ($g in $byApp) {
         if ($logsUnavailable) { break }
         $i++
-        if (($i % 50) -eq 0) { Write-Log "  App sign-in logs $i/$($byApp.Count)" }
+        $sp   = $spInfo[$g.Name]
+        $name = if ($sp) { $sp.displayName } else { $g.Name }
+        $type = if ($sp) { $sp.ServicePrincipalType } else { '?' }
+        $types = @($g.Group.EventType)
+        Write-Log ("[{0,3}/{1}] {2} ({3}) - querying {4}..." -f $i, $byApp.Count, $name, $type, ($types -join ', '))
+        $appSw  = [System.Diagnostics.Stopwatch]::StartNew()
+        $qCount = 0
         foreach ($q in $g.Group) {
+            $qCount++
+            $ctx = "$name / $($q.EventType)"
+            Write-Progress -Activity 'AppSignIns' -Status ("[{0}/{1}] {2} - {3}" -f $i, $byApp.Count, $name, $q.EventType) -PercentComplete ([math]::Min(100, 100.0 * $i / $byApp.Count))
             $uri = "https://graph.microsoft.com/beta/auditLogs/signIns?`$filter=appId eq '$($q.AppId)' and createdDateTime ge $windowStartIso and signInEventTypes/any(t: t eq '$($q.EventType)')&`$top=1&`$select=createdDateTime"
             try {
-                $hit = Invoke-GraphFirst -Uri $uri
+                $hit = Invoke-GraphFirst -Uri $uri -Context $ctx
                 if ($hit -and $hit.createdDateTime) {
                     if (-not $lastByType[$q.AppId]) { $lastByType[$q.AppId] = @{} }
                     $lastByType[$q.AppId][$q.EventType] = [datetime]$hit.createdDateTime
                 }
             } catch {
                 if (Test-GraphForbidden $_) {
-                    Write-Log "Sign-in logs not accessible (403/no licence - Entra ID P1 required). Remaining queries skipped." -Level WARN
+                    Write-Log "Sign-in logs not accessible (403/no licence - Entra ID P1 required) on $ctx. Remaining queries skipped." -Level WARN
                     $logsUnavailable = $true
                     break apps
                 }
-                Write-Log "Sign-in query failed for appId $($q.AppId) ($($q.EventType)): $($_.Exception.Message)" -Level WARN
+                Write-Log "Sign-in query failed for ${ctx}: $($_.Exception.Message)" -Level WARN
             }
         }
+        $appSw.Stop()
+        $parts = foreach ($t in $types) {
+            $d = if ($lastByType[$g.Name]) { $lastByType[$g.Name][$t] } else { $null }
+            "{0} {1}" -f $evLabel[$t], $(if ($d) { ([datetime]$d).ToString('yyyy-MM-dd') } else { '-' })
+        }
+        $e = $totalSw.Elapsed
+        $elapsedText = if ($e.TotalHours -ge 1) { $e.ToString('h\:mm\:ss') } else { $e.ToString('mm\:ss') }
+        $eta = Get-AppSignInEta -Done $i -Total $byApp.Count -Elapsed $e
+        $etaText = ''
+        if ($eta) {
+            $etaText = if ($eta.TotalMinutes -ge 1) { ", ETA ~{0} min" -f [int][math]::Round($eta.TotalMinutes) } else { ", ETA ~{0} s" -f [int][math]::Round($eta.TotalSeconds) }
+        }
+        $appSecs = $appSw.Elapsed.TotalSeconds.ToString('N1', [System.Globalization.CultureInfo]::InvariantCulture)
+        Write-Log ("[{0,3}/{1}] {2}: {3} ({4} queries, {5} s) | elapsed {6}{7}" -f $i, $byApp.Count, $name, ($parts -join ', '), $qCount, $appSecs, $elapsedText, $etaText)
+    }
+    } finally {
+        Write-Progress -Activity 'AppSignIns' -Completed
     }
     $script:Summary.metrics.signInLogsUnavailable = $logsUnavailable
 
     # 4. Write AppSignInActivity.csv (no user names stored)
+    Write-Log 'AppSignIns 4/4: writing AppSignInActivity.csv'
     $rows = foreach ($sp in $spList) {
         $lt  = $lastByType[$sp.appId]
         $act = $actMap[$sp.appId]
@@ -1235,6 +1291,8 @@ function Invoke-AppSignIns {
         }
     }
     Export-CsvSafe -Data $rows -Name 'AppSignInActivity.csv'
+    $statusText = (@($rows) | Group-Object Status | Sort-Object Name | ForEach-Object { "{0} {1}" -f $_.Name, $_.Count }) -join ', '
+    Write-Log "  $statusText"
 
     # 5. Metrics
     foreach ($g in (@($rows) | Group-Object Status)) { $script:Summary.metrics["appStatus_$($g.Name)"] = $g.Count }

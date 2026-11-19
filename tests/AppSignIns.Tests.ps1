@@ -5,7 +5,7 @@ BeforeAll {
     $ast = [System.Management.Automation.Language.Parser]::ParseFile(
         $script:Collector, [ref]$null, [ref]$null)
     $names = @('Invoke-GraphFirst','Test-GraphForbidden','Get-AppSignInStatus',
-               'Get-AppSignInQueryPlan','Invoke-AppSignIns')
+               'Get-AppSignInQueryPlan','Get-AppSignInEta','Invoke-AppSignIns')
     $defs = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true) |
         Where-Object { $names -contains $_.Name }
     foreach ($d in $defs) { . ([ScriptBlock]::Create($d.Extent.Text)) }
@@ -158,5 +158,83 @@ Describe 'Invoke-AppSignIns (mocked)' {
         $script:Summary.metrics.signInLogsUnavailable | Should -BeTrue
         $rows = $script:Exported['AppSignInActivity.csv']
         $rows[0].Status | Should -Be 'Unknown'
+    }
+}
+
+Describe 'Get-AppSignInEta' {
+    It 'returns $null before 3 apps are done' {
+        Get-AppSignInEta -Done 2 -Total 10 -Elapsed ([timespan]::FromSeconds(10)) | Should -BeNullOrEmpty
+    }
+    It 'estimates the remainder from the average per app' {
+        # 10 of 100 done in 50 s -> 5 s/app x 90 left = 450 s
+        [int](Get-AppSignInEta -Done 10 -Total 100 -Elapsed ([timespan]::FromSeconds(50))).TotalSeconds | Should -Be 450
+    }
+    It 'returns $null when all apps are done' {
+        Get-AppSignInEta -Done 10 -Total 10 -Elapsed ([timespan]::FromSeconds(50)) | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Invoke-AppSignIns progress logging (mocked)' {
+    BeforeEach {
+        $script:Summary.metrics = @{}
+        $script:Exported = @{}
+        # 2 candidates (a1 active, mi1 active) + 1 skipped (a3 old)
+        $sps = @(
+            [pscustomobject]@{ id='s1'; appId='a1';  displayName='Contoso CRM'; servicePrincipalType='Application';      appOwnerOrganizationId='t'; accountEnabled=$true; preferredSingleSignOnMode=''; tags=@() }
+            [pscustomobject]@{ id='s2'; appId='mi1'; displayName='Backup MI';    servicePrincipalType='ManagedIdentity'; appOwnerOrganizationId='t'; accountEnabled=$true; preferredSingleSignOnMode=''; tags=@() }
+            [pscustomobject]@{ id='s3'; appId='a3';  displayName='Old App';      servicePrincipalType='Application';      appOwnerOrganizationId='t'; accountEnabled=$true; preferredSingleSignOnMode=''; tags=@() }
+        )
+        $acts = @(
+            [pscustomobject]@{ appId='a1';  lastSignInActivity=[pscustomobject]@{lastSignInDateTime=([datetime]::UtcNow.AddDays(-2).ToString('o'))}; delegatedClientSignInActivity=$null; delegatedResourceSignInActivity=$null; applicationAuthenticationClientSignInActivity=$null; applicationAuthenticationResourceSignInActivity=$null }
+            [pscustomobject]@{ appId='mi1'; lastSignInActivity=[pscustomobject]@{lastSignInDateTime=([datetime]::UtcNow.AddDays(-2).ToString('o'))}; delegatedClientSignInActivity=$null; delegatedResourceSignInActivity=$null; applicationAuthenticationClientSignInActivity=$null; applicationAuthenticationResourceSignInActivity=$null }
+            [pscustomobject]@{ appId='a3';  lastSignInActivity=[pscustomobject]@{lastSignInDateTime=([datetime]::UtcNow.AddDays(-90).ToString('o'))}; delegatedClientSignInActivity=$null; delegatedResourceSignInActivity=$null; applicationAuthenticationClientSignInActivity=$null; applicationAuthenticationResourceSignInActivity=$null }
+        )
+        Mock Get-GraphAll { param($Uri) if ($Uri -match 'servicePrincipalSignInActivities') { return $acts } else { return $sps } }
+        Mock Invoke-GraphFirst { return [pscustomobject]@{ createdDateTime = [datetime]::UtcNow.AddDays(-1).ToString('o') } }
+        Mock Write-Progress {}
+    }
+
+    It 'logs step headers and per-app lines for candidates only' {
+        Invoke-AppSignIns
+        Should -Invoke Write-Log -ParameterFilter { $Message -match '^AppSignIns 1/4' } -Times 1
+        Should -Invoke Write-Log -ParameterFilter { $Message -match '^AppSignIns 2/4' } -Times 1
+        Should -Invoke Write-Log -ParameterFilter { $Message -match '^AppSignIns 3/4.*4 queries planned.*1 apps skipped' } -Times 1
+        Should -Invoke Write-Log -ParameterFilter { $Message -match '^AppSignIns 4/4' } -Times 1
+        Should -Invoke Write-Log -ParameterFilter { $Message -match '^\[\s*1/2\] Contoso CRM' } -Times 2   # query + result line
+        Should -Invoke Write-Log -ParameterFilter { $Message -match '^\[\s*2/2\] Backup MI' } -Times 2
+        Should -Invoke Write-Log -ParameterFilter { $Message -match 'Old App' } -Times 0   # skipped app: no lines
+        Should -Invoke Write-Log -ParameterFilter { $Message -match 'managedIdentity' }    # MI query plan shows the type
+    }
+
+    It 'calls Write-Progress and completes it' {
+        Invoke-AppSignIns
+        Should -Invoke Write-Progress -ParameterFilter { $Activity -eq 'AppSignIns' -and $Completed } -Times 1
+        Should -Invoke Write-Progress -ParameterFilter { $Activity -eq 'AppSignIns' -and $Status -match 'Contoso CRM - nonInteractiveUser' }
+    }
+
+    It 'throttle WARN names the app via -Context' {
+        Mock Invoke-GraphFirst {
+            param($Uri, $Headers, $MaxRetries, $Context)
+            Write-Log "Throttled (429) on $Context - waiting 10 sec." -Level WARN
+            return $null
+        }
+        Invoke-AppSignIns
+        Should -Invoke Write-Log -ParameterFilter { $Message -match 'Throttled \(429\) on Contoso CRM / nonInteractiveUser' }
+    }
+}
+
+Describe 'Invoke-GraphFirst -Context' {
+    It 'names the context instead of the URI in the throttle WARN' {
+        Mock Invoke-MgGraphRequest {
+            $ex = [System.Exception]::new('throttled')
+            $ex | Add-Member -NotePropertyName Response -NotePropertyValue ([pscustomobject]@{
+                StatusCode = [System.Net.HttpStatusCode]::TooManyRequests
+                Headers    = @{ 'Retry-After' = @('1') }
+            })
+            throw $ex
+        }
+        Mock Start-Sleep {}
+        { Invoke-GraphFirst -Uri 'https://x' -Context 'Contoso CRM / nonInteractiveUser' -MaxRetries 1 } | Should -Throw
+        Should -Invoke Write-Log -ParameterFilter { $Message -match 'on Contoso CRM / nonInteractiveUser - waiting' -and $Level -eq 'WARN' }
     }
 }
