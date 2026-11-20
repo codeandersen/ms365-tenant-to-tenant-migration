@@ -15,8 +15,11 @@ permanently. Before any licence removal or tenant closure:
 3. Only then remove licences / close.
 
 **Source MailUsers**: migrated users remain in the source as MailUsers `[Learn]` - keep them until
-the domain move finishes (they carry mail routing via targetAddress), then remove or keep per
-business decision.
+**all** batches are finished and the domain move is done. They carry mail routing via
+`targetAddress`, and mail forwarding is also how meeting updates reach migrated users while
+batches are still running; deleting source objects or breaking forwarding mid-migration
+loses those updates and means the same users can **never be re-migrated** to another
+target tenant. Then remove or keep per business decision.
 
 **Licence step-down** `[Playbook advice]`: remove Cross-Tenant User Data Migration licences first
 (they're only needed during migration), then user licences at ~T+30 once exports and the OneDrive

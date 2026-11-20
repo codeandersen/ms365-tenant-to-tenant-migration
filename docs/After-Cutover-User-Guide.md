@@ -41,8 +41,10 @@ The list is in the order you do things — day 1 first, then the first week.
 14. **Meeting recordings, transcripts and attendance reports stay in the old
     tenant** — download anything you still need before it's gone.
 15. **Teams chats** — your chats came across as new threads. You may see some
-    duplicates or temporary-looking chats; chat-with-self, reactions, apps and
-    polls are gone.
+    duplicates or temporary-looking chats. Some chats don't move at all: your
+    chat-with-self ("You"), chats started by external people, and chats with
+    colleagues who left or lost their licence. Reactions, apps and polls are
+    also gone.
 16. **The Teams calendar in the old tenant no longer works** — use the new account.
 17. **Files that lived only on your old PC** (outside OneDrive/Desktop/Documents/
     Pictures) — copy what you need before the old PC is wiped.

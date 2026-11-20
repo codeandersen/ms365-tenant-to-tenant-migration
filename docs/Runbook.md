@@ -67,6 +67,10 @@ completion lands early Saturday:
 
 Users sign in to the target on their new PCs Monday morning; Outlook builds a new profile.
 
+> **Rollback note:** a completed user can be moved *back* (mailbox + OneDrive) via the
+> standalone cross-tenant tools in reverse — no identity mapping needed. Teams meetings
+> are not recreated and chats stay in the source. `[Learn](.../migration-orchestrator-8-faq)`
+
 ## T+1 → T+30 — validation and decommission
 
 | When | What | Gate |

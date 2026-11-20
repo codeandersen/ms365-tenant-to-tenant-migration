@@ -61,6 +61,13 @@ themselves.
 `-Step Accept -Overwrite` always downloads the current mapping file to `customers/` first —
 overwritten mappings cannot be recovered.
 
+> ⚠️ **Never run `Remove-CtimData` (`-Step RemoveData`) while any migration batches are
+> running.** It removes users with completed mailbox migrations from identity mapping,
+> which breaks their Teams chats/meetings experience and any failed migrations you rerun
+> later. To *add* users to the mapping, rerun Identity Mapping **without**
+> `Remove-CtimData`. Removing mapping data also doesn't un-write attributes already
+> stamped. `[Learn](.../migration-orchestrator-7-end-user-exp)`
+
 ## Blocking OneDrive creation (manual, documented)
 
 Microsoft documents preventing personal-site creation only via the SharePoint admin centre —

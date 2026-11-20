@@ -235,6 +235,10 @@ switch ($Step) {
         else { Get-CtimReport -SourceTenantGuid $SourceTenantId }
     }
     'RemoveData' {
+        Write-Host 'WARNING: do not run Remove-CtimData while any migration batches are running -' -ForegroundColor Yellow
+        Write-Host 'it removes users with completed mailbox migrations from identity mapping and' -ForegroundColor Yellow
+        Write-Host 'breaks their Teams chats/meetings and future reruns. To add users, rerun the map' -ForegroundColor Yellow
+        Write-Host 'without RemoveData instead. (migration-orchestrator-7-end-user-exp)' -ForegroundColor Yellow
         if ($CtimTenantRole -eq 'Target') {
             if (-not $SourceTenantId) { throw 'RemoveData (target) needs -SourceTenantId.' }
             Invoke-Step "Remove-CtimData -SourceTenantGuid $SourceTenantId (run in the TARGET tenant)" {

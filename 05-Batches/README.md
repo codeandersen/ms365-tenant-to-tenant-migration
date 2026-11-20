@@ -48,6 +48,30 @@ against 80 % message / 90 % thread success thresholds).
 - Workloads per batch: `Exchange;ODSP;Teams;Meeting` recommended; `Meeting` needs
   `Teams` + `Exchange`.
 
+## Troubleshooting: a mailbox stuck after CompleteAfterDateTime
+
+If one user's mailbox migration seems stalled well past `CompleteAfterDateTime` (typically
+24 h+, or much longer than the rest of the batch), a Data Consistency Score (DCS) hold may
+be pausing it — the Orchestrator just waits. Check in Exchange Online PowerShell:
+
+```powershell
+Get-MigrationUser -Identity user@fabrikam.com | Select BatchId, Status, DataConsistencyScore
+```
+
+- `Investigate` — the admin may approve it: `Set-MigrationUser <upn> -ApproveSkippedItems`;
+  review skipped items afterwards via `Get-MigrationUserStatistics -IncludeSkippedItems`.
+- `Poor` — do **not** approve; open a Microsoft Support case with the batch ID.
+
+[Learn](.../migration-orchestrator-8-faq)
+
+## Moving a user back (rollback)
+
+The FAQ documents a supported move-back: mailbox + OneDrive can be returned to the source
+tenant with the standalone cross-tenant mailbox/OneDrive tools, configured in the reverse
+direction — no identity mapping needed. Teams meetings are **not** recreated by the
+move-back and must be rebuilt manually; chat history still lives in the source tenant.
+[Learn](.../migration-orchestrator-8-faq)
+
 ## Files
 
 - `New-MigrationBatches.ps1`, `Test-MigrationBatch.ps1`, `Get-BatchStatus.ps1` (read-only),

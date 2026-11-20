@@ -59,16 +59,20 @@ The full known-issues list from the end-user-experience page `[Learn](.../migrat
 |---|---|
 | Chat with self (the pinned "You" chat) | Users copy notes/links/files to OneDrive or a document before cutover |
 | Chats started by external users | Accept the gap or export |
-| Chats with departed or unlicensed users | Accept the gap |
+| Chats started by users who left either tenant or lost their Teams licence | Accept the gap |
+| 1:1 chats that no longer have two members | Accept the gap |
+| Threads without identifiable members | Accept the gap |
+| Messages from users with an unrecognized GUID, no Microsoft account, or no display name/ID — their messages don't migrate and they aren't added to target threads | Accept the gap |
+| History of a chat a user was **removed from before** the migration | They don't see it in the target |
 | Reactions on messages | Accept the gap |
 | Apps, polls and other chat message extensions | Recreate/re-run in target |
-| Scheduled messages and forwarded messages (as such) | Re-send |
+| Forwarded messages; **scheduled** messages that hadn't been sent yet (ones already sent migrate) | Re-send |
 | Messages over 4 MB | Accept the gap |
-| Some emoji rendering | Cosmetic — accept |
-| Code snippets formatting | Cosmetic — accept |
-| Certain attachment types | Share again from OneDrive |
+| Messages with missing body content, legacy Skype metadata or invalid source images | Accept the gap |
+| Attachments without an extension, attachments with missing markers, hosted attachments that aren't .jpg/.jpeg/.png | Share again from OneDrive |
+| Unsupported/decommissioned emojis and code snippets formatting | Cosmetic — accept |
 | Deleted messages | Expected |
-| System messages | Expected |
+| System messages (except meeting-recap messages) | Expected |
 | New messages posted in the **source** after migration | Users must stop using source Teams |
 | Possible duplicate or temporary-looking chats in the target | Cosmetic — accept |
 
@@ -82,7 +86,10 @@ Known issues `[Learn](.../migration-orchestrator-7-end-user-exp)`:
 | Attendance reports | Export before cutover if needed |
 | Meeting apps, tags | Recreate |
 | Channel meetings and shared-channel meetings | Recreate in the new team/channel |
-| Live events, webinars, town halls, virtual appointments, meetings over 250 attendees | Recreate |
+| Live events, webinars, town halls, virtual appointments, controlled-content meetings, large meetings and other custom-template meetings; meetings over 250 attendees | Recreate |
+| Meetings that already exist in the target tenant | Not migrated; their participant list is not updated — recreate if needed |
+| Skype-to-Teams / Teams-to-Skype content | Out of scope — only Teams-to-Teams tenants are supported |
+| Meeting updates once source objects/mail forwarding are removed mid-migration | Keep source MailUsers + mail forwarding until **all** batches are done (12) — deleted source objects also mean the same users can never be re-migrated |
 | Canceled meetings | Expected |
 | **Modified occurrences of a series keep the old (source) URL** | Organiser re-sends the series |
 | Appointments without Teams join coordinates | Nothing — no link to move |
@@ -94,7 +101,10 @@ Known issues `[Learn](.../migration-orchestrator-7-end-user-exp)`:
 | Meetings with distribution-group participants | Expand/recreate |
 | Spoken-language setting on meetings | Resets — set again |
 | Meetings older than 60 days keep the old URL and their chat becomes a group chat | Accept |
-| Voicemail notes | [Learn](.../migration-orchestrator-8-faq) — stays behind |
+
+Voicemails **do** migrate `[Learn](.../migration-orchestrator-8-faq)`: received voicemails
+arrive as attachments in the mailbox and as saved messages reachable by calling voicemail,
+and the greeting migrates — they just aren't listed in the Teams client UI in the target.
 
 ## 2. Shared, room and equipment mailboxes (cross-tenant mailbox migration)
 
