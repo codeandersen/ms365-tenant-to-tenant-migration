@@ -841,9 +841,10 @@ if ($appSignIns.Count -gt 0) {
     }
     $msCount = @($appSignIns | Where-Object { $_.IsMicrosoftFirstParty -eq 'True' }).Count
     if ($msCount -gt 0) {
-        $null = $r.AppendLine("- $msCount first-party Microsoft apps exist in every tenant - no action needed.")
+        $null = $r.AppendLine("- $msCount first-party Microsoft apps exist in every tenant - no action needed. They are status `ReportOnly` (sign-in logs not queried by default; re-run with `-IncludeMicrosoftAppsInSignInLogs` to query them).")
     }
     $null = $r.AppendLine("- Sources: sign-in logs (beta, requires Entra ID P1) [Learn]($signInListDoc); service principal sign-in activity report (beta, **preview** - may include partial sign-ins and misclassify app-only activity) [Learn]($spActDoc).")
+    $null = $r.AppendLine('- **The activity report is preview and can be stale** - observed in practice: months-old dates for apps in daily use. It is therefore never used to conclude an app is unused: only apps whose sign-in logs were queried (`SignInLogsQueried = True`) can be `ActiveEarlier`/`NoActivityRecorded`; others are `ReportOnly`.')
     $null = $r.AppendLine('')
     if ($invSummary -and $invSummary.signInLogsUnavailable -eq $true) {
         $notInventoried.Add('Sign-in logs not available (Entra ID P1 required) - only the activity report was used')

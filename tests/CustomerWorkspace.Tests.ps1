@@ -169,3 +169,21 @@ Describe 'git ignore rules for the workspace' {
         }
     }
 }
+
+Describe 'English-only guard for collector and tools' {
+    It 'no Danish markers in 00-Assessment/*.ps1 or tools/*.ps*1' {
+        $markers = 'Ingen ', 'startet', 'skrevet', 'Underproces', 'Log ind', 'mangler', 'Afbrudt', 'Forbundet', 'forbindelser lukket', 'Indsamling afbrydes', 'tenant-inventar', ' angivet '
+        $files = @(Get-ChildItem (Join-Path $script:Repo '00-Assessment') -Filter '*.ps1') +
+                 @(Get-ChildItem (Join-Path $script:Repo 'tools') -Filter '*.ps*1')
+        $hits = foreach ($f in $files) {
+            $i = 0
+            foreach ($line in [IO.File]::ReadAllLines($f.FullName)) {
+                $i++
+                foreach ($m in $markers) {
+                    if ($line -cmatch [regex]::Escape($m)) { "$($f.Name):$i : $m : $($line.Trim())" }
+                }
+            }
+        }
+        @($hits) | Should -Be @()
+    }
+}

@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     Collects a read-only inventory of a Microsoft 365 tenant ahead of a tenant-to-tenant migration.
 
@@ -52,6 +52,15 @@
     falls back to the service principal sign-in activity report (beta, preview).
     https://learn.microsoft.com/en-us/graph/api/signin-list?view=graph-rest-beta
     https://learn.microsoft.com/en-us/graph/api/reportroot-list-serviceprincipalsigninactivities?view=graph-rest-beta
+
+.PARAMETER SignInQueryThrottle
+    Parallelism for the per-app sign-in log queries in AppSignIns (1-8, default 4).
+    Uses ForEach-Object -Parallel - the Graph connection is reused across runspaces.
+    Set 1 to force sequential queries.
+
+.PARAMETER IncludeMicrosoftAppsInSignInLogs
+    Also query the sign-in logs for Microsoft first-party apps. Default: they are
+    skipped (status ReportOnly) - they exist in every tenant and need no action.
 
 .PARAMETER TenantId
     Mandatory. Tenant ID (GUID) or a verified domain (e.g. contoso.com or
@@ -134,7 +143,12 @@ param(
     [switch]$ChildPauseOnError,
 
     [ValidateRange(1,30)]
-    [int]$SignInLookbackDays = 30
+    [int]$SignInLookbackDays = 30,
+
+    [ValidateRange(1,8)]
+    [int]$SignInQueryThrottle = 4,
+
+    [switch]$IncludeMicrosoftAppsInSignInLogs
 )
 
 Set-StrictMode -Version 1
@@ -150,6 +164,23 @@ function Resolve-InventoryOutputRoot {
     if ($OutputRoot) { return $OutputRoot }
     if ($Customer) { return (Join-Path $RepoRoot "customers\$Customer\inventory") }
     throw 'Pass -Customer <name> (output goes to customers/<name>/inventory) or -OutputRoot <path>.'
+}
+
+function Get-InventoryFolderName {
+    # Pure: Inventory_<safe tenant>_<Role>_<stamp>. The tenant name is sanitised
+    # only for the folder name - whitespace becomes '_' and path-illegal
+    # characters are stripped. The original -TenantName still goes to
+    # summary.json and the log.
+    param(
+        [Parameter(Mandatory)][string]$TenantName,
+        [Parameter(Mandatory)][string]$Role,
+        [Parameter(Mandatory)][string]$Timestamp
+    )
+    $safe = $TenantName -replace '\s+', '_'
+    foreach ($c in [IO.Path]::GetInvalidFileNameChars()) { $safe = $safe.Replace([string]$c, '') }
+    $safe = $safe.Trim('.', ' ')
+    if (-not $safe) { $safe = 'tenant' }
+    return "Inventory_${safe}_${Role}_${Timestamp}"
 }
 
 function Test-InventoryOutputPath {
@@ -186,7 +217,7 @@ if ($ServiceGroup) {
 } else {
     $timestamp   = Get-Date -Format 'yyyyMMdd_HHmmss'
     $root        = Resolve-InventoryOutputRoot -OutputRoot $OutputRoot -Customer $Customer -RepoRoot (Split-Path $PSScriptRoot -Parent)
-    $outDir      = Join-Path $root "Inventory_${TenantName}_${Role}_$timestamp"
+    $outDir      = Join-Path $root (Get-InventoryFolderName -TenantName $TenantName -Role $Role -Timestamp $timestamp)
     $attachDir   = Join-Path $outDir 'attachments'
 }
 if (-not (Test-InventoryOutputPath -Path $outDir -RepoRoot (Split-Path $PSScriptRoot -Parent))) {
@@ -223,7 +254,7 @@ function Export-CsvSafe {
     param([object[]]$Data, [string]$Name)
     $path = Join-Path $attachDir $Name
     if ($null -eq $Data -or $Data.Count -eq 0) {
-        Write-Log "Ingen data til $Name" -Level WARN
+        Write-Log "No data for $Name" -Level WARN
         return
     }
     $Data | Export-Csv -Path $path -NoTypeInformation -Encoding utf8BOM
@@ -261,6 +292,12 @@ function Get-GraphAll {
                         if ($ra) { $retryAfter = [int]($ra | Select-Object -First 1) }
                     } catch {}
                     Write-Log "Throttled ($status) on $next - waiting $retryAfter sec. (attempt $attempt/$MaxRetries)" -Level WARN
+                    Start-Sleep -Seconds $retryAfter
+                    continue
+                }
+                if (($status -eq 500 -or $status -eq 502 -or $status -eq 504) -and $attempt -le $MaxRetries) {
+                    $retryAfter = [math]::Min(5 * [math]::Pow(2, $attempt - 1), 30)
+                    Write-Log "Transient $status on $next - retrying in $retryAfter sec. (attempt $attempt/$MaxRetries)" -Level WARN
                     Start-Sleep -Seconds $retryAfter
                     continue
                 }
@@ -314,6 +351,13 @@ function Invoke-GraphFirst {
                 Start-Sleep -Seconds $retryAfter
                 continue
             }
+            if (($status -eq 500 -or $status -eq 502 -or $status -eq 504) -and $attempt -le $MaxRetries) {
+                $target = if ($Context) { $Context } else { $Uri }
+                $retryAfter = [math]::Min(5 * [math]::Pow(2, $attempt - 1), 30)
+                Write-Log "Transient $status on $target - retrying in $retryAfter sec. (attempt $attempt/$MaxRetries)" -Level WARN
+                Start-Sleep -Seconds $retryAfter
+                continue
+            }
             throw
         }
     }
@@ -338,14 +382,18 @@ function Get-AppSignInStatus {
     #   ActiveInWindow     - a sign-in log hit in the window, or report activity inside the window
     #   ActiveEarlier      - last activity (report) predates the window
     #   NoActivityRecorded - sources available, nothing found
+    #   ReportOnly         - sign-in logs were not queried for this app (first-party
+    #                        by default); only the activity report date is shown
     #   Unknown            - both sources unavailable
     param(
         [object[]]$LogDates,
         [object]$LastReportDate,
         [datetime]$WindowStart,
         [switch]$LogsUnavailable,
-        [switch]$ReportUnavailable
+        [switch]$ReportUnavailable,
+        [switch]$ReportOnly
     )
+    if ($ReportOnly) { return 'ReportOnly' }
     if ($LogsUnavailable -and $ReportUnavailable) { return 'Unknown' }
     if (-not $LogsUnavailable -and $LogDates -and @($LogDates).Count -gt 0) { return 'ActiveInWindow' }
     if (-not $ReportUnavailable -and $LastReportDate) {
@@ -356,24 +404,19 @@ function Get-AppSignInStatus {
 }
 
 function Get-AppSignInQueryPlan {
-    # Pure: which (appId, eventType) sign-in log queries to run for the window.
-    # Candidates: apps with report activity on/after WindowStart - or every app when
-    # the activity report is unavailable. Managed identities are queried only for
-    # the 'managedIdentity' event type.
+    # Pure: which (appId, eventType) sign-in log queries to run.
+    # The sign-in activity report is NOT used to filter: it is a beta preview and
+    # has been observed to show months-old dates for apps in daily use. Every
+    # non-Microsoft service principal is queried (managed identities only for the
+    # 'managedIdentity' event type). Microsoft first-party apps are queried only
+    # with -IncludeMicrosoftAppsInSignInLogs.
     param(
         [object[]]$ServicePrincipals,
-        [hashtable]$ActivityByAppId,
-        [datetime]$WindowStart,
-        [switch]$ReportUnavailable
+        [switch]$IncludeMicrosoftApps
     )
     $plan = [System.Collections.Generic.List[object]]::new()
     foreach ($sp in $ServicePrincipals) {
-        $candidate = [bool]$ReportUnavailable
-        if (-not $candidate) {
-            $act = $ActivityByAppId[$sp.appId]
-            $candidate = ($act -and $act.LastActivityDate -and [datetime]$act.LastActivityDate -ge $WindowStart)
-        }
-        if (-not $candidate) { continue }
+        if ($sp.IsMicrosoftFirstParty -and -not $IncludeMicrosoftApps) { continue }
         $types = if ($sp.IsManagedIdentity) { @('managedIdentity') } else { @('interactiveUser','nonInteractiveUser','servicePrincipal') }
         foreach ($t in $types) { $plan.Add([pscustomobject]@{ AppId = $sp.appId; EventType = $t }) }
     }
@@ -1175,69 +1218,153 @@ function Invoke-AppSignIns {
     }
     $script:Summary.metrics.spSignInActivityUnavailable = $reportUnavailable
 
-    # 3. Sign-in logs per type, only for candidates
+    # 3. Sign-in logs per event type - every non-Microsoft app (the activity
+    #    report is preview and has shown months-old dates for apps in daily use,
+    #    so it is never used to skip apps). Microsoft first-party apps are
+    #    report-only unless -IncludeMicrosoftAppsInSignInLogs is given.
     $logsUnavailable = $false
     $lastByType = @{}
-    $plan = Get-AppSignInQueryPlan -ServicePrincipals $spList -ActivityByAppId $actMap -WindowStart $windowStart -ReportUnavailable:$reportUnavailable
+    $queriedApps = [System.Collections.Generic.HashSet[string]]::new()
+    $plan = Get-AppSignInQueryPlan -ServicePrincipals $spList -IncludeMicrosoftApps:$IncludeMicrosoftAppsInSignInLogs
     $byApp = @($plan | Group-Object AppId)
-    $skippedApps = $spList.Count - $byApp.Count
-    if ($reportUnavailable) {
-        Write-Log ("AppSignIns 3/4: sign-in logs - all {0} apps (activity report unavailable), {1} queries planned" -f (& $fmtN $spList.Count), (& $fmtN $plan.Count))
+    $msReportOnly = if ($IncludeMicrosoftAppsInSignInLogs) { 0 } else { @($spList | Where-Object IsMicrosoftFirstParty).Count }
+    if ($IncludeMicrosoftAppsInSignInLogs) {
+        Write-Log ("AppSignIns 3/4: sign-in logs - all {0} apps, {1} queries planned" -f (& $fmtN $byApp.Count), (& $fmtN $plan.Count))
     } else {
-        Write-Log ("AppSignIns 3/4: sign-in logs for apps active since {0} - {1} of {2} apps, {3} queries planned ({4} apps skipped: no activity in the window)" -f
-            $windowStart.ToString('yyyy-MM-dd'), (& $fmtN $byApp.Count), (& $fmtN $spList.Count), (& $fmtN $plan.Count), (& $fmtN $skippedApps))
+        Write-Log ("AppSignIns 3/4: sign-in logs - {0} non-Microsoft apps, {1} queries planned; {2} Microsoft first-party apps report-only (use -IncludeMicrosoftAppsInSignInLogs to query them)" -f
+            (& $fmtN $byApp.Count), (& $fmtN $plan.Count), (& $fmtN $msReportOnly))
     }
     $spInfo = @{}
     foreach ($sp in $spList) { $spInfo[$sp.appId] = $sp }
+    $totalApps = $byApp.Count
     $evLabel = @{ interactiveUser = 'interactive'; nonInteractiveUser = 'non-interactive'; servicePrincipal = 'service principal'; managedIdentity = 'managed identity' }
     $i = 0
     $totalSw = [System.Diagnostics.Stopwatch]::StartNew()
-    try {
-    :apps foreach ($g in $byApp) {
-        if ($logsUnavailable) { break }
-        $i++
-        $sp   = $spInfo[$g.Name]
-        $name = if ($sp) { $sp.displayName } else { $g.Name }
-        $type = if ($sp) { $sp.ServicePrincipalType } else { '?' }
-        $types = @($g.Group.EventType)
-        Write-Log ("[{0,3}/{1}] {2} ({3}) - querying {4}..." -f $i, $byApp.Count, $name, $type, ($types -join ', '))
-        $appSw  = [System.Diagnostics.Stopwatch]::StartNew()
-        $qCount = 0
-        foreach ($q in $g.Group) {
-            $qCount++
-            $ctx = "$name / $($q.EventType)"
-            Write-Progress -Activity 'AppSignIns' -Status ("[{0}/{1}] {2} - {3}" -f $i, $byApp.Count, $name, $q.EventType) -PercentComplete ([math]::Min(100, 100.0 * $i / $byApp.Count))
-            $uri = "https://graph.microsoft.com/beta/auditLogs/signIns?`$filter=appId eq '$($q.AppId)' and createdDateTime ge $windowStartIso and signInEventTypes/any(t: t eq '$($q.EventType)')&`$top=1&`$select=createdDateTime"
-            try {
-                $hit = Invoke-GraphFirst -Uri $uri -Context $ctx
-                if ($hit -and $hit.createdDateTime) {
-                    if (-not $lastByType[$q.AppId]) { $lastByType[$q.AppId] = @{} }
-                    $lastByType[$q.AppId][$q.EventType] = [datetime]$hit.createdDateTime
-                }
-            } catch {
-                if (Test-GraphForbidden $_) {
-                    Write-Log "Sign-in logs not accessible (403/no licence - Entra ID P1 required) on $ctx. Remaining queries skipped." -Level WARN
-                    $logsUnavailable = $true
-                    break apps
-                }
-                Write-Log "Sign-in query failed for ${ctx}: $($_.Exception.Message)" -Level WARN
-            }
-        }
-        $appSw.Stop()
-        $parts = foreach ($t in $types) {
-            $d = if ($lastByType[$g.Name]) { $lastByType[$g.Name][$t] } else { $null }
+    $emitResult = {
+        param($Index, [string]$AppId, $Types, $Last, [int]$QCount, [double]$Seconds)
+        $sp    = $spInfo[$AppId]
+        $name  = if ($sp) { $sp.displayName } else { $AppId }
+        $parts = foreach ($t in $Types) {
+            $d = if ($Last) { $Last[$t] } else { $null }
             "{0} {1}" -f $evLabel[$t], $(if ($d) { ([datetime]$d).ToString('yyyy-MM-dd') } else { '-' })
         }
         $e = $totalSw.Elapsed
         $elapsedText = if ($e.TotalHours -ge 1) { $e.ToString('h\:mm\:ss') } else { $e.ToString('mm\:ss') }
-        $eta = Get-AppSignInEta -Done $i -Total $byApp.Count -Elapsed $e
+        $eta = Get-AppSignInEta -Done $Index -Total $totalApps -Elapsed $e
         $etaText = ''
         if ($eta) {
             $etaText = if ($eta.TotalMinutes -ge 1) { ", ETA ~{0} min" -f [int][math]::Round($eta.TotalMinutes) } else { ", ETA ~{0} s" -f [int][math]::Round($eta.TotalSeconds) }
         }
-        $appSecs = $appSw.Elapsed.TotalSeconds.ToString('N1', [System.Globalization.CultureInfo]::InvariantCulture)
-        Write-Log ("[{0,3}/{1}] {2}: {3} ({4} queries, {5} s) | elapsed {6}{7}" -f $i, $byApp.Count, $name, ($parts -join ', '), $qCount, $appSecs, $elapsedText, $etaText)
+        $appSecs = $Seconds.ToString('N1', [System.Globalization.CultureInfo]::InvariantCulture)
+        Write-Log ("[{0,3}/{1}] {2}: {3} ({4} queries, {5} s) | elapsed {6}{7}" -f $Index, $totalApps, $name, ($parts -join ', '), $QCount, $appSecs, $elapsedText, $etaText)
+        Write-Progress -Activity 'AppSignIns' -Status ("[{0}/{1}] {2} done" -f $Index, $totalApps, $name) -PercentComplete ([math]::Min(100, 100.0 * $Index / $totalApps))
     }
+    # Parallel path: the Graph SDK auth context is a process-level singleton, so
+    # ForEach-Object -Parallel runspaces reuse the connection. Only taken when
+    # the real SDK cmdlet is loaded (a function/mock of the same name means we
+    # are in a test or a fallback context - stay sequential there).
+    $worker = {
+        $appId  = $_.Name
+        $types  = @($_.Group.EventType)
+        $sync   = $using:sync
+        $winIso = $using:windowStartIso
+        Import-Module Microsoft.Graph.Authentication -ErrorAction SilentlyContinue
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        $last = @{}; $q = 0; $forbidden = $false; $authBroken = $false
+        foreach ($t in $types) {
+            if ($sync.Stop) { break }
+            $q++
+            $uri = "https://graph.microsoft.com/beta/auditLogs/signIns?`$filter=appId eq '$appId' and createdDateTime ge $winIso and signInEventTypes/any(t: t eq '$t')&`$top=1&`$select=createdDateTime"
+            $attempt = 0; $resp = $null
+            while ($true) {
+                try { $resp = Invoke-MgGraphRequest -Method GET -Uri $uri -OutputType PSObject; break }
+                catch {
+                    $attempt++
+                    $status = $null
+                    try { if ($_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode } } catch {}
+                    if ($status -eq 403 -or "$($_.Exception.Message)" -match '(?i)Authentication_RequestFromNonPremiumTenantOrB2CTenant|license') {
+                        $forbidden = $true; $sync.Stop = $true; break
+                    }
+                    if ("$($_.Exception.Message)" -match '(?i)authentication needed|connect-mggraph|not recognized') {
+                        $authBroken = $true; $sync.Stop = $true; break
+                    }
+                    if (($status -eq 429 -or $status -eq 503) -and $attempt -le 5) {
+                        $wait = 10
+                        try { $ra = $_.Exception.Response.Headers['Retry-After']; if ($ra) { $wait = [int]($ra | Select-Object -First 1) } } catch {}
+                        Start-Sleep -Seconds $wait
+                        continue
+                    }
+                    if (($status -eq 500 -or $status -eq 502 -or $status -eq 504) -and $attempt -le 5) {
+                        Start-Sleep -Seconds ([math]::Min(5 * [math]::Pow(2, $attempt - 1), 30))
+                        continue
+                    }
+                    $sync.Errors.Add("$appId / $t : $($_.Exception.Message)")
+                    break
+                }
+            }
+            if ($forbidden -or $authBroken) { break }
+            if ($resp -and $resp.createdDateTime) { $last[$t] = [datetime]$resp.createdDateTime }
+        }
+        $sw.Stop()
+        [pscustomobject]@{ AppId = $appId; Types = $types; LastByType = $last; Queries = $q; Seconds = $sw.Elapsed.TotalSeconds; Forbidden = $forbidden; AuthBroken = $authBroken }
+    }
+    $mgCmdlet = (Get-Command Invoke-MgGraphRequest -ErrorAction SilentlyContinue).CommandType -eq 'Cmdlet'
+    $parallel = ($SignInQueryThrottle -gt 1 -and $byApp.Count -gt 1 -and $mgCmdlet)
+    try {
+        if ($parallel) {
+            Write-Log "  running sign-in queries in parallel (throttle $SignInQueryThrottle)"
+            $sync = [hashtable]::Synchronized(@{ Stop = $false; Errors = [System.Collections.Concurrent.ConcurrentBag[string]]::new() })
+            $authBrokenCount = 0
+            $byApp | ForEach-Object -Parallel $worker -ThrottleLimit $SignInQueryThrottle | ForEach-Object {
+                $r = $_
+                $i++
+                if ($r.AuthBroken) { $authBrokenCount++ }
+                if ($r.Forbidden) { $logsUnavailable = $true }
+                if ($r.LastByType.Count -gt 0) { $lastByType[$r.AppId] = $r.LastByType }
+                [void]$queriedApps.Add($r.AppId)
+                & $emitResult $i $r.AppId $r.Types $r.LastByType $r.Queries $r.Seconds
+            }
+            foreach ($e in $sync.Errors) { Write-Log "Sign-in query failed: $e" -Level WARN }
+            if ($logsUnavailable) { Write-Log "Sign-in logs not accessible (403/no licence - Entra ID P1 required). Remaining queries skipped." -Level WARN }
+            if ($authBrokenCount -gt 0) {
+                Write-Log "Parallel runspaces could not reuse the Graph context for $authBrokenCount app(s) - re-querying them sequentially." -Level WARN
+                $byApp = @($byApp | Where-Object { $queriedApps -notcontains $_.Name -or @($lastByType[$_.Name]).Count -eq 0 })
+            }
+        }
+        if (-not $parallel -or $authBrokenCount -gt 0) {
+        :apps foreach ($g in $byApp) {
+            if ($logsUnavailable) { break }
+            if ($queriedApps.Contains($g.Name) -and $lastByType[$g.Name]) { continue }
+            $i++
+            $sp   = $spInfo[$g.Name]
+            $name = if ($sp) { $sp.displayName } else { $g.Name }
+            $types = @($g.Group.EventType)
+            [void]$queriedApps.Add($g.Name)
+            $appSw  = [System.Diagnostics.Stopwatch]::StartNew()
+            $qCount = 0
+            foreach ($q in $g.Group) {
+                $qCount++
+                $ctx = "$name / $($q.EventType)"
+                $uri = "https://graph.microsoft.com/beta/auditLogs/signIns?`$filter=appId eq '$($q.AppId)' and createdDateTime ge $windowStartIso and signInEventTypes/any(t: t eq '$($q.EventType)')&`$top=1&`$select=createdDateTime"
+                try {
+                    $hit = Invoke-GraphFirst -Uri $uri -Context $ctx
+                    if ($hit -and $hit.createdDateTime) {
+                        if (-not $lastByType[$q.AppId]) { $lastByType[$q.AppId] = @{} }
+                        $lastByType[$q.AppId][$q.EventType] = [datetime]$hit.createdDateTime
+                    }
+                } catch {
+                    if (Test-GraphForbidden $_) {
+                        Write-Log "Sign-in logs not accessible (403/no licence - Entra ID P1 required) on $ctx. Remaining queries skipped." -Level WARN
+                        $logsUnavailable = $true
+                        break apps
+                    }
+                    Write-Log "Sign-in query failed for ${ctx}: $($_.Exception.Message)" -Level WARN
+                }
+            }
+            $appSw.Stop()
+            & $emitResult $i $g.Name $types $lastByType[$g.Name] $qCount $appSw.Elapsed.TotalSeconds
+        }
+        }
     } finally {
         Write-Progress -Activity 'AppSignIns' -Completed
     }
@@ -1265,7 +1392,7 @@ function Invoke-AppSignIns {
         $all = @($logDates) + @($repDates)
         $lastSeen = $null
         if ($all.Count -gt 0) { $lastSeen = @($all | Sort-Object -Descending | Select-Object -First 1)[0] }
-        $status = Get-AppSignInStatus -LogDates $logDates -LastReportDate $maxRep -WindowStart $windowStart -LogsUnavailable:$logsUnavailable -ReportUnavailable:$reportUnavailable
+        $status = Get-AppSignInStatus -LogDates $logDates -LastReportDate $maxRep -WindowStart $windowStart -LogsUnavailable:$logsUnavailable -ReportUnavailable:$reportUnavailable -ReportOnly:(-not $queriedApps.Contains($sp.appId))
         [pscustomobject]@{
             ServicePrincipalId       = $sp.id
             AppId                    = $sp.appId
@@ -1276,6 +1403,7 @@ function Invoke-AppSignIns {
             AccountEnabled           = $sp.AccountEnabled
             PreferredSingleSignOnMode= $sp.PreferredSingleSignOnMode
             Status                   = $status
+            SignInLogsQueried        = $queriedApps.Contains($sp.appId)
             LastSeenAny              = if ($lastSeen) { & $fmt $lastSeen } else { '' }
             DaysSinceLastSeen        = if ($lastSeen) { [int]([datetime]::UtcNow - $lastSeen).TotalDays } else { '' }
             LastInteractiveUser      = $lInt
@@ -1362,7 +1490,9 @@ function Invoke-Exchange {
             }
             if ($m.ArchiveStatus -eq 'Active' -or $m.AutoExpandingArchiveEnabled) {
                 try {
-                    $loc = @(Get-MailboxLocation -Identity $m.ExchangeGuid.Guid -MailboxLocationType AuxArchive -ErrorAction Stop)
+                    # -MailboxLocationType AuxArchive fails ("type supports multiple mailbox
+                    # locations"); -User returns all locations, count the AuxArchive ones.
+                    $loc = @(Get-MailboxLocation -User $m.ExchangeGuid.Guid -ErrorAction Stop | Where-Object { $_.MailboxLocationType -eq 'AuxArchive' })
                     $row.AuxArchiveCount = $loc.Count
                 } catch {
                     $row.AuxArchiveCount = $null
@@ -1670,12 +1800,8 @@ function Invoke-OneDrive {
     }
 
     if ($script:Summary.metrics.spoDataSource -ne 'SPO') { return }
-    try {
-        $usage = Get-GraphReport -Endpoint 'getOneDriveUsageAccountDetail' -CsvName 'OneDriveUsage.csv'
-        if ($usage) { $script:Summary.metrics.oneDriveFileCount = ($usage | Measure-Object 'File Count' -Sum).Sum }
-    } catch {
-        Write-Log "OneDrive usage report failed: $($_.Exception.Message)" -Level WARN
-    }
+    # OneDriveUsage.csv + oneDriveFileCount are collected by the Usage section in the
+    # Graph child process - this function runs in the SharePoint child (no Graph).
 }
 
 function Invoke-SharePoint {
@@ -1976,6 +2102,20 @@ function Invoke-Usage {
         try { $null = Get-GraphReport -Endpoint $r.Endpoint -CsvName $r.Csv }
         catch { Write-Log "Report $($r.Endpoint) failed: $($_.Exception.Message)" -Level WARN }
     }
+    # OneDrive usage report - collected here in the Graph child (the OneDrive section
+    # runs in the SharePoint child and cannot call Graph). Skipped when the OneDrive
+    # Graph fallback already wrote it (same process can only know via the file).
+    $odUsagePath = Join-Path $attachDir 'OneDriveUsage.csv'
+    if (-not (Test-Path $odUsagePath)) {
+        try {
+            $usage = Get-GraphReport -Endpoint 'getOneDriveUsageAccountDetail' -CsvName 'OneDriveUsage.csv'
+            if ($usage -and -not (Test-Path $odUsagePath)) {
+                $script:Summary.metrics.oneDriveFileCount = ($usage | Measure-Object 'File Count' -Sum).Sum
+            }
+        } catch {
+            Write-Log "OneDrive usage report failed: $($_.Exception.Message)" -Level WARN
+        }
+    }
     $script:Summary.metrics.concealedReports = $script:ConcealedReports
 }
 
@@ -2242,14 +2382,14 @@ function Save-Summary {
     }
     # Empty keys (e.g. devices without a join type) cannot be read by ConvertFrom-Json
     ($script:Summary | ConvertTo-Json -Depth 8) -replace '(?m)^(\s*)"":', '$1"(unknown)":' | Out-File -FilePath $path -Encoding utf8BOM
-    Write-Log "Summary skrevet til $FileName"
+    Write-Log "Summary written to $FileName"
 }
 
 # =====================================================================
-# UNDERPROCES-TILSTAND (-ServiceGroup angivet internt)
+# CHILD-PROCESS MODE (-ServiceGroup set internally)
 # =====================================================================
 if ($ServiceGroup) {
-    Write-Log "=== Underproces '$ServiceGroup' startet: $TenantName ($Role), tenant $TenantId ==="
+    Write-Log "=== Child process '$ServiceGroup' started: $TenantName ($Role), tenant $TenantId ==="
 
     # Resolve -TenantId (idempotent for a GUID)
     try {
@@ -2288,8 +2428,8 @@ if ($ServiceGroup) {
         switch ($ServiceGroup) {
             'Graph' {
                 if (-not (Get-Module -ListAvailable Microsoft.Graph.Authentication)) {
-                    $script:Summary.failedSections['Graph'] = 'Modulet Microsoft.Graph.Authentication mangler'
-                    throw 'Modulet Microsoft.Graph.Authentication mangler'
+                    $script:Summary.failedSections['Graph'] = 'Module Microsoft.Graph.Authentication missing'
+                    throw 'Module Microsoft.Graph.Authentication missing'
                 }
                 $scopes = if ($Role -eq 'Source') {
                     @('User.Read.All','Group.Read.All','Directory.Read.All','Organization.Read.All','AuditLog.Read.All',
@@ -2330,7 +2470,7 @@ if ($ServiceGroup) {
                     $script:TenantGuid     = $org.id
                     $script:OrgDisplayName = $org.displayName
                     $script:InitialDomain  = ($org.verifiedDomains | Where-Object isInitial | Select-Object -First 1).name
-                    Write-Host "`n=== Forbundet til tenant: $($org.displayName) ($($org.id)) ===" -ForegroundColor Cyan
+                    Write-Host "`n=== Connected to tenant: $($org.displayName) ($($org.id)) ===" -ForegroundColor Cyan
                     Write-Log "Tenant-guard OK: $($org.displayName) ($($org.id))"
                     $script:Summary.metrics.tenantId          = $org.id
                     $script:Summary.metrics.tenantDisplayName = $org.displayName
@@ -2381,8 +2521,8 @@ if ($ServiceGroup) {
             }
             'Exchange' {
                 if (-not (Get-Module -ListAvailable ExchangeOnlineManagement)) {
-                    $script:Summary.skippedSections['Exchange'] = 'Modulet ExchangeOnlineManagement mangler'
-                    foreach ($s in $toRun) { $script:Summary.skippedSections[$s] = 'Modulet ExchangeOnlineManagement mangler' }
+                    $script:Summary.skippedSections['Exchange'] = 'Module ExchangeOnlineManagement missing'
+                    foreach ($s in $toRun) { $script:Summary.skippedSections[$s] = 'Module ExchangeOnlineManagement missing' }
                     $toRun = @()
                     break
                 }
@@ -2477,7 +2617,7 @@ if ($ServiceGroup) {
                     break
                 }
                 if (-not (Get-Module -ListAvailable Microsoft.Online.SharePoint.PowerShell)) {
-                    foreach ($s in $toRun) { $script:Summary.skippedSections[$s] = 'Modulet Microsoft.Online.SharePoint.PowerShell mangler - Graph-fallback bruges' }
+                    foreach ($s in $toRun) { $script:Summary.skippedSections[$s] = 'Module Microsoft.Online.SharePoint.PowerShell missing - Graph fallback used' }
                     $toRun = @()
                     break
                 }
@@ -2505,7 +2645,7 @@ if ($ServiceGroup) {
             }
             'Teams' {
                 if (-not (Get-Module -ListAvailable MicrosoftTeams)) {
-                    $script:Summary.skippedSections['TeamsPhone'] = 'Modulet MicrosoftTeams mangler'
+                    $script:Summary.skippedSections['TeamsPhone'] = 'Module MicrosoftTeams missing'
                     $toRun = @()
                     break
                 }
@@ -2556,7 +2696,7 @@ if ($ServiceGroup) {
         try { Disconnect-ExchangeOnline -Confirm:$false -ErrorAction SilentlyContinue | Out-Null } catch {}
         try { Disconnect-SPOService -ErrorAction SilentlyContinue | Out-Null } catch {}
         try { Disconnect-MicrosoftTeams -ErrorAction SilentlyContinue | Out-Null } catch {}
-        Write-Log "Underproces '$ServiceGroup': forbindelser lukket."
+        Write-Log "Child process '$ServiceGroup': connections closed."
     }
 
     if (-not $script:Summary.metrics.Contains('concealedReports')) {
@@ -2574,7 +2714,7 @@ if ($ServiceGroup) {
 # =====================================================================
 # ORCHESTRATOR MODE (normal run)
 # =====================================================================
-Write-Log "=== Tenant-inventar startet: $TenantName ($Role) ==="
+Write-Log "=== Tenant inventory started: $TenantName ($Role) ==="
 Write-Log "Sections to run: $($requested -join ', ')"
 
 # ---- Resolve -TenantId to the tenant GUID ----
@@ -2604,7 +2744,7 @@ function Start-Child {
         'SharePoint' { 'SharePoint Online admin (sites, OneDrive, tenant settings)' }
         'Teams'      { 'Microsoft Teams (telephony)' }
     }
-    Write-Host "`n>>> Log ind i $TenantName ($script:TenantGuid) for $Group - $label" -ForegroundColor Cyan
+    Write-Host "`n>>> Sign in to $TenantName ($script:TenantGuid) for $Group - $label" -ForegroundColor Cyan
     Write-Log "Starting child process: $Group $(if ($ChildSections) { "[$($ChildSections -join ', ')]" })"
     $argList = @('-NoProfile','-File', $PSCommandPath,
         '-Role', $Role, '-TenantName', $TenantName, '-TenantId', $script:TenantGuid,
@@ -2616,6 +2756,9 @@ function Start-Child {
     if ($SourceInventoryPath) { $argList += @('-SourceInventoryPath', $SourceInventoryPath) }
     if ($DisableWAM)       { $argList += '-DisableWAM' }
     if ($UseDeviceCode)    { $argList += '-UseDeviceCode' }
+    if ($IncludeMicrosoftAppsInSignInLogs) { $argList += '-IncludeMicrosoftAppsInSignInLogs' }
+    if ($SignInQueryThrottle -ne 4) { $argList += @('-SignInQueryThrottle', $SignInQueryThrottle) }
+    if ($SignInLookbackDays -ne 30) { $argList += @('-SignInLookbackDays', $SignInLookbackDays) }
     $quoted = $argList | ForEach-Object { if ("$_" -match '[\s"]') { '"' + ("$_" -replace '"','\"') + '"' } else { "$_" } }
     # -NewWindow: run the child process in its own console window (if the WAM sign-in cannot show in the current terminal).
     if (-not $NewWindow) {
@@ -2653,7 +2796,7 @@ if ($needGraph -or $needSPO -or $needEXO -or $needTeams) {
         $abortReason = "The Graph child process stopped unexpectedly (exit $code) - see the error above in the console."
     }
     if ($abortReason) {
-        Write-Log "Indsamling afbrydes: $abortReason" -Level ERROR
+        Write-Log "Collection aborting: $abortReason" -Level ERROR
         $abort = $true
     }
     $script:GuestMode = $false
@@ -2761,7 +2904,7 @@ if (-not $script:Summary.metrics.Contains('concealedReports')) {
 }
 Save-Summary -FileName 'summary.json'
 if ($abort) {
-    Write-Log "=== Afbrudt: $abortReason Output: $outDir ===" -Level ERROR
+    Write-Log "=== Aborted: $abortReason Output: $outDir ===" -Level ERROR
     throw "Collection aborted - $abortReason"
 }
 Write-Log "=== Done. Output: $outDir ==="

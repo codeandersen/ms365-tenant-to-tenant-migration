@@ -88,7 +88,13 @@ deciding what to rebuild. Columns: identity first (`ServicePrincipalId`, `AppId`
 last-activity dates from the preview report. `EntraPortalUrl` opens the app in the
 Entra portal for a closer look. `Status` values: `ActiveInWindow` (sign-in within
 the lookback window), `ActiveEarlier` (last activity predates the window),
-`NoActivityRecorded`, `Unknown` (neither source was reachable - e.g. no Entra ID P1).
+`NoActivityRecorded`, `ReportOnly` (sign-in logs were not queried - Microsoft
+first-party apps by default; re-run with `-IncludeMicrosoftAppsInSignInLogs` to
+query them too, `-SignInQueryThrottle 1-8` sets the parallelism), `Unknown`
+(neither source was reachable - e.g. no Entra ID P1). `SignInLogsQueried` says
+whether the logs were checked for the app. Note: the activity report is preview
+and has shown months-old dates for apps in daily use - it is never used to call
+an app unused; "inactive" verdicts come from the sign-in logs only.
 
 ## Requirements
 
