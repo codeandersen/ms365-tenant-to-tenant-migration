@@ -470,6 +470,13 @@ function Get-GraphReport {
     }
 }
 
+function Test-GraphSession {
+    # True when a usable Microsoft Graph context exists in this process. The Graph
+    # fallbacks can only run where Connect-MgGraph succeeded (the Graph child) -
+    # the Exchange/SharePoint/Teams children deliberately have no Graph session.
+    try { return ($null -ne (Get-MgContext)) } catch { return $false }
+}
+
 function ConvertTo-GB {
     param([object]$Value)
     if ($null -eq $Value -or "$Value" -eq '') { return 0 }
@@ -601,7 +608,14 @@ function Invoke-OneDriveFallback {
 
 function Invoke-SharePointFallback {
     Write-Log "SharePoint: using Graph /sites/getAllSites + usage report as fallback (SPO admin not available)."
-    $usage = Get-GraphReport -Endpoint 'getSharePointSiteUsageDetail'
+    $usageErr = $null
+    $usage = $null
+    try {
+        $usage = Get-GraphReport -Endpoint 'getSharePointSiteUsageDetail'
+    } catch {
+        $usageErr = $_.Exception.Message
+        Write-Log "getSharePointSiteUsageDetail failed: $usageErr" -Level WARN
+    }
     $usageByUrl = @{}
     foreach ($u in @($usage)) {
         if ($u.'Site URL' -and $u.'Is Deleted' -ne 'True') { $usageByUrl[$u.'Site URL'.ToLower()] = $u }
@@ -609,10 +623,14 @@ function Invoke-SharePointFallback {
 
     $rows = [System.Collections.Generic.List[object]]::new()
     $sites = $null
+    $sitesErr = $null
     try {
         $sites = Get-GraphAll -Uri 'https://graph.microsoft.com/v1.0/sites/getAllSites?$select=id,webUrl,displayName,createdDateTime,lastModifiedDateTime,isPersonalSite&$top=999'
     } catch {
-        Write-Log "/sites/getAllSites failed: $($_.Exception.Message)" -Level WARN
+        $sitesErr = $_.Exception.Message
+        $hint = ''
+        try { if ([int]$_.Exception.Response.StatusCode -eq 403) { $hint = ' (delegated /sites/getAllSites requires a SharePoint administrator role)' } } catch {}
+        Write-Log "/sites/getAllSites failed: $sitesErr$hint" -Level WARN
     }
     if ($sites) {
         foreach ($s in ($sites | Where-Object { -not $_.isPersonalSite -and $_.webUrl -notmatch '-my\.sharepoint\.com/personal/' })) {
@@ -647,7 +665,12 @@ function Invoke-SharePointFallback {
         $u = $usageByUrl[$key]
         foreach ($r in (ConvertFrom-SharePointUsageReport -Rows @($u))) { $rows.Add($r) }
     }
-    if ($rows.Count -eq 0) { throw "Neither /sites/getAllSites nor getSharePointSiteUsageDetail returned data" }
+    if ($rows.Count -eq 0) {
+        $why = @()
+        if ($sitesErr) { $why += "getAllSites: $sitesErr" } else { $why += "getAllSites returned no sites" }
+        if ($usageErr) { $why += "getSharePointSiteUsageDetail: $usageErr" } else { $why += "getSharePointSiteUsageDetail returned no rows" }
+        throw ("SharePoint fallback returned no data - " + ($why -join '; '))
+    }
     Export-CsvSafe -Data $rows.ToArray() -Name 'SharePointSites.csv'
     $script:Summary.metrics.spoDataSource       = 'Graph-fallback'
     $script:Summary.metrics.fallbackUsed        = $true
@@ -1430,6 +1453,7 @@ function Invoke-AppSignIns {
 
 function Invoke-Exchange {
     if (-not $script:ExoConnected) {
+        if (-not (Test-GraphSession)) { throw "EXO PowerShell unavailable and this process has no Graph session - rerun this section in the Graph process" }
         Invoke-ExchangeFallback
         return
     }
@@ -1698,6 +1722,7 @@ function Invoke-Exchange {
 
 function Invoke-Purview {
     if (-not $script:IppsConnected) {
+        if (-not (Test-GraphSession)) { throw "IPPS not connected and this process has no Graph session - rerun this section in the Graph process" }
         # Graph fallback: eDiscovery cases and legal holds (v1.0, requires eDiscovery.Read.All)
         Write-Log "Purview: IPPS not connected - fetching eDiscovery data via Graph."
         try {
@@ -1768,6 +1793,7 @@ function Invoke-Purview {
 
 function Invoke-OneDrive {
     if (-not $script:SpoAvailable) {
+        if (-not (Test-GraphSession)) { throw "SPO admin unavailable and this process has no Graph session - rerun this section in the Graph process" }
         Invoke-OneDriveFallback
         return
     }
@@ -1796,6 +1822,7 @@ function Invoke-OneDrive {
     } catch {
         Write-Log "Get-SPOSite failed ($($_.Exception.Message)) - falling back to Graph report." -Level WARN
         $script:SpoAvailable = $false
+        if (-not (Test-GraphSession)) { throw }
         Invoke-OneDriveFallback
     }
 
@@ -1806,6 +1833,7 @@ function Invoke-OneDrive {
 
 function Invoke-SharePoint {
     if (-not $script:SpoAvailable) {
+        if (-not (Test-GraphSession)) { throw "SPO admin unavailable and this process has no Graph session - rerun this section in the Graph process" }
         Invoke-SharePointFallback
         return
     }
@@ -1840,6 +1868,7 @@ function Invoke-SharePoint {
     } catch {
         Write-Log "Get-SPOSite failed ($($_.Exception.Message)) - falling back to Graph report." -Level WARN
         $script:SpoAvailable = $false
+        if (-not (Test-GraphSession)) { throw }
         Invoke-SharePointFallback
         return
     }
@@ -2567,8 +2596,10 @@ if ($ServiceGroup) {
                         Write-Log "Connect-ExchangeOnline failed: $($_.Exception.Message).$wamHint" -Level ERROR
                     }
                     foreach ($s in 'Exchange' | Where-Object { $toRun -contains $_ }) {
-                        $script:Summary.failedSections[$s] = "Connect-ExchangeOnline failed: $($_.Exception.Message)"
+                        $script:Summary.failedSections[$s] = "Connect-ExchangeOnline failed: $($_.Exception.Message) - deferred to Graph fallback"
                     }
+                    # This process has no Graph session - the section fallback cannot run here
+                    $toRun = @($toRun | Where-Object { $_ -ne 'Exchange' })
                 }
 
                 if ($toRun -contains 'Purview' -and $script:ExoConnected) {
@@ -2602,10 +2633,12 @@ if ($ServiceGroup) {
                         } else {
                             Write-Log "Connect-IPPSSession failed: $($_.Exception.Message).$wamHint" -Level ERROR
                         }
-                        $script:Summary.failedSections['Purview'] = "Connect-IPPSSession failed: $($_.Exception.Message)"
+                        $script:Summary.failedSections['Purview'] = "Connect-IPPSSession failed: $($_.Exception.Message) - deferred to Graph fallback"
+                        $toRun = @($toRun | Where-Object { $_ -ne 'Purview' })
                     }
                 } elseif ($toRun -contains 'Purview') {
                     $script:Summary.skippedSections['Purview'] = 'Requires an active Exchange Online connection - Graph fallback (eDiscovery) is used'
+                    $toRun = @($toRun | Where-Object { $_ -ne 'Purview' })
                 }
             }
             'SharePoint' {
@@ -2613,7 +2646,8 @@ if ($ServiceGroup) {
                     # Guests do not have access to the SharePoint admin center
                     $script:Summary.skippedSections['SharePointAdmin'] = 'Guest accounts do not have access to SharePoint admin - Graph fallback is used'
                     Write-Log "Guest mode: Connect-SPOService is skipped." -Level WARN
-                    foreach ($s in $toRun) { $script:Summary.failedSections[$s] = 'SharePoint admin not available as guest - Graph fallback is used' }
+                    foreach ($s in $toRun) { $script:Summary.failedSections[$s] = 'SharePoint admin not available as guest - deferred to Graph fallback' }
+                    $toRun = @()   # no Graph session in this process - the Graph fallback pass runs them
                     break
                 }
                 if (-not (Get-Module -ListAvailable Microsoft.Online.SharePoint.PowerShell)) {
@@ -2626,21 +2660,39 @@ if ($ServiceGroup) {
                     $spoUrl = "https://$($Matches[1])-admin.sharepoint.com"
                 }
                 if ($spoUrl) {
-                    try {
-                        if (-not (Get-Command Connect-SPOService -ErrorAction SilentlyContinue)) {
-                            # The module is not marked Core-compatible; Microsoft recommends -UseWindowsPowerShell in PowerShell 7
-                            Import-Module Microsoft.Online.SharePoint.PowerShell -UseWindowsPowerShell -DisableNameChecking -WarningAction SilentlyContinue -ErrorAction Stop
+                    $spoErr = $null
+                    for ($attempt = 1; $attempt -le 2 -and -not $script:SpoAvailable; $attempt++) {
+                        try {
+                            if (-not (Get-Command Connect-SPOService -ErrorAction SilentlyContinue)) {
+                                # The module is not marked Core-compatible; Microsoft recommends -UseWindowsPowerShell in PowerShell 7
+                                Import-Module Microsoft.Online.SharePoint.PowerShell -UseWindowsPowerShell -DisableNameChecking -WarningAction SilentlyContinue -ErrorAction Stop
+                            }
+                            if ($attempt -eq 1) { Write-Log "Connecting to SharePoint Online ($spoUrl) - if no sign-in window appears, check the taskbar." }
+                            else { Write-Log "Retrying Connect-SPOService (attempt 2)..." }
+                            Connect-SPOService -Url $spoUrl -ErrorAction Stop
+                            $script:SpoAvailable = $true
+                        } catch {
+                            $spoErr = $_.Exception.Message
+                            try { Disconnect-SPOService -ErrorAction SilentlyContinue | Out-Null } catch {}
                         }
-                        Connect-SPOService -Url $spoUrl -ErrorAction Stop
-                        $script:SpoAvailable = $true
+                    }
+                    if ($script:SpoAvailable) {
                         Write-Log "SharePoint Online connected ($spoUrl)."
-                    } catch {
-                        Write-Log "Connect-SPOService failed: $($_.Exception.Message) - Graph fallback is used." -Level WARN
-                        foreach ($s in $toRun) { $script:Summary.failedSections[$s] = "Connect-SPOService failed: $($_.Exception.Message)" }
+                    } else {
+                        Write-Log "Connect-SPOService failed: $spoErr - sections deferred to the Graph fallback." -Level WARN
+                        if ($spoErr -match 'OAuth|authentication session') {
+                            Write-Log "Hint: 'No valid OAuth 2.0 authentication session exists' is a known SPO module sign-in issue - a rerun usually resolves it; the account also needs the SharePoint Administrator role." -Level WARN
+                        }
+                        $script:Summary.failedSections['SharePointAdmin'] = "Connect-SPOService failed: $spoErr"
+                        # Keep the real reason per section and stop here - this process has no
+                        # Graph session, so the Graph fallback inside the sections cannot run.
+                        foreach ($s in $toRun) { $script:Summary.failedSections[$s] = "Connect-SPOService failed: $spoErr - deferred to Graph fallback" }
+                        $toRun = @()
                     }
                 } else {
                     Write-Log "SPO admin URL could not be derived - Graph fallback is used." -Level WARN
-                    foreach ($s in $toRun) { $script:Summary.failedSections[$s] = 'SPO admin URL could not be derived' }
+                    foreach ($s in $toRun) { $script:Summary.failedSections[$s] = 'SPO admin URL could not be derived - deferred to Graph fallback' }
+                    $toRun = @()
                 }
             }
             'Teams' {
@@ -2773,6 +2825,7 @@ function Start-Child {
 }
 
 $childGroupsRun = [System.Collections.Generic.List[string]]::new()
+$recovered = @{}   # sections that failed in their own child but succeeded in the Graph fallback pass
 $abort = $false
 $abortReason = $null
 
@@ -2818,6 +2871,10 @@ if (-not $abort -and $needEXO) {
         Write-Log "Exchange sections failed/skipped ($($exFail -join ', ')) - running Graph fallback." -Level WARN
         $code = Start-Child -Group 'Graph' -ChildSections $exFail
         $childGroupsRun.Add('Graph')
+        $gpFb = Get-PartialSummary -Group 'Graph'
+        foreach ($s in $exFail) {
+            if ($gpFb -and -not ($gpFb.failedSections -and $gpFb.failedSections.PSObject.Properties[$s])) { $recovered[$s] = $true }
+        }
     }
 }
 
@@ -2835,6 +2892,10 @@ if (-not $abort -and $needSPO -and -not $script:GuestMode) {
         Write-Log "SharePoint sections failed ($($spFail -join ', ')) - running Graph fallback." -Level WARN
         $code = Start-Child -Group 'Graph' -ChildSections $spFail
         $childGroupsRun.Add('Graph')
+        $gpFb = Get-PartialSummary -Group 'Graph'
+        foreach ($s in $spFail) {
+            if ($gpFb -and -not ($gpFb.failedSections -and $gpFb.failedSections.PSObject.Properties[$s])) { $recovered[$s] = $true }
+        }
     }
 } elseif ($needSPO -and $script:GuestMode) {
     Write-Log "Guest mode: SharePoint child process skipped - the Graph process already handled OneDrive/SharePoint via fallback."
@@ -2884,10 +2945,16 @@ foreach ($p in $partialFiles) {
         foreach ($prop in $part.metrics.PSObject.Properties) { $mergedMetrics[$prop.Name] = $prop.Value }
     }
     if ($part.failedSections) {
-        foreach ($prop in $part.failedSections.PSObject.Properties) { $script:Summary.failedSections[$prop.Name] = $prop.Value }
+        foreach ($prop in $part.failedSections.PSObject.Properties) {
+            if ($recovered[$prop.Name]) { continue }   # the Graph fallback pass collected this section
+            $script:Summary.failedSections[$prop.Name] = $prop.Value
+        }
     }
     if ($part.skippedSections) {
-        foreach ($prop in $part.skippedSections.PSObject.Properties) { $script:Summary.skippedSections[$prop.Name] = $prop.Value }
+        foreach ($prop in $part.skippedSections.PSObject.Properties) {
+            if ($recovered[$prop.Name]) { continue }
+            $script:Summary.skippedSections[$prop.Name] = $prop.Value
+        }
     }
     if ($part.collectedBy -and -not $script:Summary.collectedBy) { $script:Summary.collectedBy = $part.collectedBy }
 }

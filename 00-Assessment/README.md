@@ -102,9 +102,20 @@ an app unused; "inactive" verdicts come from the sign-in logs only.
 - Modules: `Microsoft.Graph.Authentication`, `ExchangeOnlineManagement`,
   `Microsoft.Online.SharePoint.PowerShell`, `MicrosoftTeams` (see
   `tools\Test-ModuleHealth.ps1`)
-- Roles: Global Reader or Global Admin in the tenant. A B2B guest account works
-  with reduced coverage (Exchange/SharePoint fall back to Graph usage reports);
-  holds, permissions and mail flow must be re-checked with a member account.
+- Roles: Global Reader or Global Admin in the tenant. **SharePoint Administrator**
+  is needed for full SPO coverage (`Get-SPOSite`, tenant settings, external
+  users) and for the delegated `GET /sites/getAllSites` fallback — without it the
+  fallback only has the usage reports, and site counts can be lower than the true
+  site list (the reports omit sites with no recent activity). A B2B guest account
+  works with reduced coverage (Exchange/SharePoint fall back to Graph usage
+  reports); holds, permissions and mail flow must be re-checked with a member
+  account.
+- If `Connect-SPOService` fails, the OneDrive/SharePoint sections are not run in
+  the SharePoint child process (it has no Graph session) — the real error stays
+  in `summary.json` under `SharePointAdmin`, and the orchestrator automatically
+  re-runs the sections in a Graph pass. `Connect-SPOService` failing with
+  "No valid OAuth 2.0 authentication session exists" is a known module sign-in
+  issue — a rerun usually resolves it.
 
 ## Data handling
 

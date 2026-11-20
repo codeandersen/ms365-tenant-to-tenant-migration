@@ -170,9 +170,14 @@ $extUsers     = Import-AttCsv 'ExternalUsers.csv'
 $appSignIns   = Import-AttCsv 'AppSignInActivity.csv'
 
 $invSummary = $null
+$invFailed  = $null
 $sumPath = Join-Path $InventoryPath 'summary.json'
 if (Test-Path $sumPath) {
-    try { $invSummary = (Get-Content $sumPath -Raw | ConvertFrom-Json).metrics } catch {}
+    try {
+        $invJson = Get-Content $sumPath -Raw | ConvertFrom-Json
+        if ($invJson.PSObject.Properties['metrics'])        { $invSummary = $invJson.metrics }
+        if ($invJson.PSObject.Properties['failedSections']) { $invFailed  = $invJson.failedSections }
+    } catch {}
 }
 
 $userMbx  = @($mailboxes | Where-Object { $_.RecipientTypeDetails -eq 'UserMailbox' })
@@ -248,6 +253,18 @@ $sumRows = @(
 )
 $null = $r.AppendLine((Format-Table $sumRows @('Workload', 'Count', 'Size (GB)')))
 $null = $r.AppendLine('')
+
+if ($invSummary -and $invSummary.PSObject.Properties['spoDataSource'] -and $invSummary.spoDataSource -eq 'Graph-fallback') {
+    $null = $r.AppendLine('> **Data quality:** OneDrive/SharePoint came from the Graph usage-report fallback (SharePoint admin access was unavailable). Site counts can be lower than the true site list - the usage report omits sites with no recent activity - and SPO-only fields (quota, lock state, sharing capability, tenant settings, external users) are empty. Re-run the inventory with a SharePoint administrator account for the full picture.')
+    $null = $r.AppendLine('')
+    $notInventoried.Add('SharePoint tenant settings and external users (requires SharePoint admin access - Graph fallback was used)')
+}
+if ($invFailed -and $invFailed.PSObject.Properties['SharePoint'] -and $spSites.Count -eq 0) {
+    $notInventoried.Add("SharePoint sites (SharePointSites.csv) - collection failed: $($invFailed.SharePoint)")
+}
+if ($invFailed -and $invFailed.PSObject.Properties['OneDrive'] -and $oneDrives.Count -eq 0) {
+    $notInventoried.Add("OneDrive sites (OneDrive.csv) - collection failed: $($invFailed.OneDrive)")
+}
 
 # 2. Archive mailboxes ----------------------------------------------------------
 
