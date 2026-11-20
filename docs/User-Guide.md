@@ -12,6 +12,8 @@ Written for end users. Everything here is generic — adapt names and dates per 
 - Keep using the old PC as normal until cutover weekend.
 - Files you keep **outside** OneDrive (Desktop if not synced, local folders, PST files) do not
   move — check your old PC before it's wiped, and tell IT about anything stored locally.
+- Your **chat with yourself** in Teams (the pinned "You" chat) does not move either — copy any
+  notes, links or files you want to keep into OneDrive or a document before cutover.
 - Your old mail, calendar, contacts, OneDrive files and Teams chats move automatically. Some
   things genuinely don't (see the "what changes" list below).
 

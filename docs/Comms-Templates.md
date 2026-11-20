@@ -24,11 +24,13 @@ More instructions follow closer to the date.
 
 ## T-7 — preparation
 
-Subject: One week to go — two small things to do
+Subject: One week to go — three small things to do
 
 1. When your new PC arrives you may sign in to it once with your new account to register MFA —
    but **do not open Outlook, OneDrive or Teams on it yet**. Your data arrives at the cutover.
 2. Check your old PC for files stored outside OneDrive and flag them to `<help desk>`.
+3. Your **chat with yourself** in Teams (the pinned "You" chat) doesn't move — copy any notes,
+   links or files you want to keep into OneDrive or a document before the weekend.
 
 Cutover starts `<date> <time>`; the old environment goes quiet then.
 

@@ -57,7 +57,7 @@ The full known-issues list from the end-user-experience page `[Learn](.../migrat
 
 | Doesn't migrate | What to do instead |
 |---|---|
-| Chat with self | Keep notes/files elsewhere |
+| Chat with self (the pinned "You" chat) | Users copy notes/links/files to OneDrive or a document before cutover |
 | Chats started by external users | Accept the gap or export |
 | Chats with departed or unlicensed users | Accept the gap |
 | Reactions on messages | Accept the gap |
