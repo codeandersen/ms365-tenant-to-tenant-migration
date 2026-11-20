@@ -1326,7 +1326,14 @@ function Invoke-AppSignIns {
                 }
             }
             if ($forbidden -or $authBroken) { break }
-            if ($resp -and $resp.createdDateTime) { $last[$t] = [datetime]$resp.createdDateTime }
+            # The signIns endpoint returns a collection: unwrap .value[0].
+            # (Invoke-GraphFirst cannot be called inside ForEach-Object -Parallel.)
+            $first = $null
+            if ($resp) {
+                if ($resp.PSObject.Properties.Name -contains 'value') { $first = @($resp.value)[0] }
+                else { $first = $resp }
+            }
+            if ($first -and $first.createdDateTime) { $last[$t] = [datetime]$first.createdDateTime }
         }
         $sw.Stop()
         [pscustomobject]@{ AppId = $appId; Types = $types; LastByType = $last; Queries = $q; Seconds = $sw.Elapsed.TotalSeconds; Forbidden = $forbidden; AuthBroken = $authBroken }

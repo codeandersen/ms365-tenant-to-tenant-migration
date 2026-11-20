@@ -311,3 +311,14 @@ Describe 'parallel path gating (static)' {
         $src | Should -Match 'Synchronized'
     }
 }
+
+Describe 'parallel worker unwraps the signIns collection (static)' {
+    It 'does not read createdDateTime off the paged response object' {
+        $src = [IO.File]::ReadAllText($script:Collector)
+        # Regression: the worker must unwrap .value[0] - the collection
+        # response itself has no createdDateTime and silently yields zero hits.
+        $src | Should -Match "resp\.PSObject\.Properties\.Name -contains 'value'"
+        $src | Should -Match '\$first = @\(\$resp\.value\)\[0\]'
+        $src | Should -Not -Match 'if \(\$resp -and \$resp\.createdDateTime\)'
+    }
+}
