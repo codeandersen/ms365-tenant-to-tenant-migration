@@ -848,6 +848,9 @@ $samlD = Import-AttCsv 'SamlCertificates.csv'
 Add-Decision 'SAML enterprise apps' $samlD.Count 'SAML SSO certificates cannot move - re-upload/re-sign in the target (check SamlCertificates.csv expiry).'
 $pimD = Import-AttCsv 'PimEligibleAssignments.csv'
 Add-Decision 'PIM role assignments' $pimD.Count 'PIM does not migrate - recreate eligibility/activation schedules in the target.'
+$dupDlNames = 0
+if ($invSummary -and $invSummary.PSObject.Properties['duplicateDistributionGroupNames']) { $dupDlNames = [int]$invSummary.duplicateDistributionGroupNames }
+Add-Decision 'Duplicate group display names' $dupDlNames 'Distribution groups sharing a display name are ambiguous in scripts and tools - rename before migration to avoid ambiguity.'
 $softDelD = Import-AttCsv 'SoftDeletedMailboxes.csv'
 Add-Decision 'Soft-deleted mailboxes' $softDelD.Count 'Restore or purge before cut-over - they are not migrated.'
 $gdapD = Import-AttCsv 'DelegatedAdminRelationships.csv'

@@ -7,7 +7,8 @@ BeforeAll {
     $names = @('Get-SiteType','ConvertTo-ThirdPartyEvidence','ConvertTo-AppCredentialRows',
                'ConvertTo-SamlCertificateRows','ConvertTo-InboxRuleForwarding','Get-DaysToExpiry',
                'Get-UpnDomain','Invoke-Collector','Get-CollectorRegistryEntry','Test-CollectorLevel',
-               'Test-GraphForbidden','Test-LicenseGate')
+               'Test-GraphForbidden','Test-LicenseGate','Merge-CollectorRecords',
+               'Resolve-TeamsTenantId','Get-DuplicateDisplayNames','Test-ExoCmdlet')
     $defs = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true) |
         Where-Object { $names -contains $_.Name }
     foreach ($d in $defs) { . ([ScriptBlock]::Create($d.Extent.Text)) }
@@ -137,6 +138,8 @@ Describe 'Invoke-Collector - phase-1 level and licence cases' {
         $script:CollectorRecords  = [System.Collections.Generic.List[object]]::new()
         $script:CollectorWarnings = [System.Collections.Generic.List[string]]::new()
         $script:CollectorRows     = 0
+        $script:CollectorStatusOverride = $null
+        $script:CollectorErrorOverride  = $null
         $script:AppOnly           = $false
         $script:Summary.skippedSections = @{}
         $script:Level = 'Advanced'
@@ -172,5 +175,123 @@ Describe 'Invoke-Collector - phase-1 level and licence cases' {
             $script:CollectorRows += 1
         }
         $script:CollectorRecords[0].Status | Should -Be 'Success'
+    }
+}
+
+Describe 'Merge-CollectorRecords' {
+    It 'merges child CSVs from attachments plus legacy root files and own records' {
+        $inv = Join-Path $TestDrive 'inv'
+        $att = Join-Path $inv 'attachments'
+        $null = New-Item -ItemType Directory -Path $att -Force
+        $hdr = 'TenantId,TenantName,CollectedAt,Collector,CollectorVersion,Endpoint,Cmdlet,ApiVersion,ObjectCount,DurationSeconds,Status,Completeness,Errors,Warnings,KnownLimitations'
+        @($hdr,
+          't,Contoso,2026-11-25T12:00:00,Graph,1.0,,,v1.0,5,1,Success,Complete,,,',
+          't,Contoso,2026-11-25T12:00:01,Shared,1.0,,,v1.0,1,1,Success,Complete,,,') |
+            Set-Content (Join-Path $att 'Collectors.Graph.csv') -Encoding UTF8
+        @($hdr,
+          't,Contoso,2026-11-25T12:00:00,Exchange,1.0,,Get-X,PowerShell,3,1,Success,Complete,,,',
+          't,Contoso,2026-11-25T12:00:02,Shared,1.0,,,v1.0,9,1,PartialSuccess,Partial,,,') |
+            Set-Content (Join-Path $att 'Collectors.Exchange.csv') -Encoding UTF8
+        # Old location (inventory root) from a resume run - still merged.
+        @($hdr, 't,Contoso,2026-11-25T11:00:00,Legacy,1.0,,,v1.0,2,1,Success,Complete,,,') |
+            Set-Content (Join-Path $inv 'Collectors.Old.csv') -Encoding UTF8
+        $own = @([pscustomobject]@{ Collector = 'ParentOnly'; CollectedAt = '2026-11-25T12:00:00' })
+        $rows = @(Merge-CollectorRecords -AttachDir $att -LegacyDir $inv -OwnRecords $own)
+        $rows.Collector | Sort-Object | Should -Be @('Exchange','Graph','Legacy','ParentOnly','Shared')
+        # Latest record per collector wins (Shared: Exchange file has the newer CollectedAt)
+        ($rows | Where-Object Collector -eq 'Shared').Status | Should -Be 'PartialSuccess'
+        ($rows | Where-Object Collector -eq 'Shared').ObjectCount | Should -Be '9'
+    }
+}
+
+Describe 'Resolve-TeamsTenantId' {
+    It 'prefers the Connect-MicrosoftTeams result TenantId' {
+        Resolve-TeamsTenantId -ConnectResult ([pscustomobject]@{ TenantId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' }) -GetCsTenant { throw 'nope' } |
+            Should -Be 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+    }
+    It 'falls back to Get-CsTenant' {
+        Resolve-TeamsTenantId -ConnectResult $null -GetCsTenant { [pscustomobject]@{ TenantId = '00000000-0000-0000-0000-000000000000' } } |
+            Should -Be '00000000-0000-0000-0000-000000000000'
+    }
+    It 'returns $null when neither source has an id' {
+        Resolve-TeamsTenantId -ConnectResult $null -GetCsTenant { throw 'Access denied' } | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Get-DuplicateDisplayNames' {
+    It 'returns only names used more than once' {
+        Get-DuplicateDisplayNames -DisplayNames @('IT-avdelningen','Sales','IT-avdelningen','HR','Sales') |
+            Sort-Object | Should -Be @('IT-avdelningen','Sales')
+        Get-DuplicateDisplayNames -DisplayNames @('A','B') | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Test-ExoCmdlet' {
+    BeforeEach {
+        $script:CollectorStatusOverride = $null
+        $script:CollectorErrorOverride  = $null
+        $script:Summary.skippedSections = @{}
+    }
+    It 'returns $true when the cmdlet exists' {
+        Mock Get-Command { $true }
+        Test-ExoCmdlet -Name 'Get-Whatever' | Should -BeTrue
+    }
+    It 'records AccessDenied + role hint when the cmdlet is absent' {
+        Mock Get-Command { $null }
+        Test-ExoCmdlet -Name 'Get-AddressList' -RoleHint 'Address Lists role not assigned' | Should -BeFalse
+        $script:CollectorStatusOverride | Should -Be 'AccessDenied'
+        $script:Summary.skippedSections['Cmdlet:Get-AddressList'] | Should -Match 'Address Lists role not assigned'
+    }
+    It 'produces an AccessDenied collector record through Invoke-Collector' {
+        Mock Get-Command { $null }
+        $script:CollectorRecords = [System.Collections.Generic.List[object]]::new()
+        $script:CollectorWarnings = [System.Collections.Generic.List[string]]::new()
+        $script:CollectorRows = 0; $script:Level = 'Deep'; $script:AppOnly = $false
+        Invoke-Collector -Name 'AddressLists' -ScriptBlock {
+            if (-not (Test-ExoCmdlet -Name 'Get-AddressList')) { return }
+            $script:CollectorRows += 1
+        }
+        $script:CollectorRecords[0].Status | Should -Be 'AccessDenied'
+    }
+}
+
+Describe 'Invoke-Collector - aggregated-failure and not-found classification' {
+    BeforeEach {
+        $script:CollectorRecords  = [System.Collections.Generic.List[object]]::new()
+        $script:CollectorWarnings = [System.Collections.Generic.List[string]]::new()
+        $script:CollectorRows     = 0
+        $script:CollectorStatusOverride = $null
+        $script:CollectorErrorOverride  = $null
+        $script:AppOnly           = $false
+        $script:Summary.skippedSections = @{}
+        $script:Level = 'Deep'
+    }
+
+    It 'records AccessDenied when every per-object call was denied (override)' {
+        Invoke-Collector -Name 'SiteAdmins' -ScriptBlock {
+            $script:CollectorStatusOverride = 'AccessDenied'
+            $script:Summary.skippedSections['SiteAdmins'] = 'denied on all sites'
+        }
+        $script:CollectorRecords[0].Status | Should -Be 'AccessDenied'
+    }
+
+    It 'records DiscoveryFailed with the error text via the override pair' {
+        Invoke-Collector -Name 'AutopilotDevices' -ScriptBlock {
+            $script:CollectorStatusOverride = 'DiscoveryFailed'
+            $script:CollectorErrorOverride  = 'InternalServerError'
+        }
+        $script:CollectorRecords[0].Status | Should -Be 'DiscoveryFailed'
+        $script:CollectorRecords[0].Errors | Should -Be 'InternalServerError'
+    }
+
+    It 'records NotInUse for the ApplicationAccessPolicy "could not be found" pattern' {
+        Invoke-Collector -Name 'ApplicationAccessPolicies' -ScriptBlock {
+            try { throw "The cmdlet couldn't be found on 'contoso.onmicrosoft.com\*'." } catch {
+                if ("$($_.Exception.Message)" -notmatch "couldn't be found|ManagementObjectNotFound") {
+                    $script:CollectorWarnings.Add('[WARN] real failure')
+                }
+            }
+        }
+        $script:CollectorRecords[0].Status | Should -Be 'NotInUse'
     }
 }

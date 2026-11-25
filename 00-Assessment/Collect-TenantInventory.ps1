@@ -290,6 +290,8 @@ if (Test-Path $regFile) {
 $script:CollectorRecords  = [System.Collections.Generic.List[object]]::new()
 $script:CollectorWarnings = [System.Collections.Generic.List[string]]::new()
 $script:CollectorRows     = 0
+$script:CollectorStatusOverride = $null
+$script:CollectorErrorOverride  = $null
 
 function Get-CollectorRegistryEntry {
     param([string]$Name)
@@ -352,6 +354,9 @@ function Invoke-Collector {
         Write-Log "Collector '$Name' skipped: requires -Level $($reg.Level) or higher."
         return
     }
+    # Never inherit an override left behind by a previous collector that threw
+    $script:CollectorStatusOverride = $null
+    $script:CollectorErrorOverride  = $null
     $warnStart  = $script:CollectorWarnings.Count
     $skipBefore = @($script:Summary.skippedSections.Keys)
     $rowsBefore = $script:CollectorRows
@@ -377,7 +382,16 @@ function Invoke-Collector {
     $newWarns  = @($script:CollectorWarnings | Select-Object -Skip $warnStart | Where-Object { "$_".StartsWith('[WARN]') })
     $rec.Warnings    = (@($newWarns | Select-Object -First 3)) -join ' | '
     $rec.ObjectCount = $script:CollectorRows - $rowsBefore
-    if (@($newSkips | Where-Object { "$($script:Summary.skippedSections[$_])" -match 'no license' }).Count -gt 0) {
+    if ($script:CollectorStatusOverride) {
+        # A block that completes but wants a specific outcome (e.g. every per-site
+        # call denied -> AccessDenied, a cmdlet missing from the session) sets
+        # $script:CollectorStatusOverride (+ optional CollectorErrorOverride)
+        # instead of throwing.
+        $rec.Status = "$script:CollectorStatusOverride"
+        if ($script:CollectorErrorOverride) { $rec.Errors = "$script:CollectorErrorOverride" }
+        $script:CollectorStatusOverride = $null
+        $script:CollectorErrorOverride  = $null
+    } elseif (@($newSkips | Where-Object { "$($script:Summary.skippedSections[$_])" -match 'no license' }).Count -gt 0) {
         $rec.Status = 'NotLicensed'
     } elseif ($newSkips.Count -gt 0) {
         $rec.Status = 'Skipped'
@@ -771,6 +785,89 @@ function ConvertTo-InboxRuleForwarding {
         }
     }
     return $rows
+}
+
+function Merge-CollectorRecords {
+    # Merges Collectors.<Group>.csv files written into the attachments folder
+    # (tolerating the pre-Phase-1-fix location at the inventory root for resume
+    # runs) with this process's own in-memory records. Keeps the latest record
+    # per collector by CollectedAt - a resume re-run can produce several.
+    param(
+        [Parameter(Mandatory)][string]$AttachDir,
+        [string]$LegacyDir,
+        [object[]]$OwnRecords
+    )
+    $byName = [ordered]@{}
+    $files = @()
+    foreach ($dir in @($AttachDir, $LegacyDir) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique) {
+        $files += @(Get-ChildItem (Join-Path $dir 'Collectors.*.csv') -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -ne 'Collectors.csv' })
+    }
+    foreach ($cf in @($files | Sort-Object FullName -Unique)) {
+        foreach ($row in @(Import-Csv -Path $cf.FullName)) {
+            $cur = $byName[$row.Collector]
+            if (-not $cur -or [datetime]$row.CollectedAt -gt [datetime]$cur.CollectedAt) { $byName[$row.Collector] = $row }
+        }
+    }
+    foreach ($row in @($OwnRecords)) {
+        $cur = $byName[$row.Collector]
+        if (-not $cur -or [datetime]$row.CollectedAt -gt [datetime]$cur.CollectedAt) { $byName[$row.Collector] = $row }
+    }
+    return @($byName.Values)
+}
+
+function Test-ExoCmdlet {
+    # Returns $true when the cmdlet exists in the connected Exchange session.
+    # A missing cmdlet almost always means the management role holding it is not
+    # assigned to the account (e.g. the Address Lists role is not in Organization
+    # Management by default) - records AccessDenied + the role hint and returns
+    # $false so the collector block can return early.
+    # https://learn.microsoft.com/en-us/exchange/address-books/address-lists/address-lists
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [string]$RoleHint
+    )
+    if (Get-Command $Name -ErrorAction SilentlyContinue) { return $true }
+    $hint = if ($RoleHint) { " ($RoleHint)" } else { '' }
+    $script:CollectorStatusOverride = 'AccessDenied'
+    $script:Summary.skippedSections["Cmdlet:$Name"] = "$Name is not available in this Exchange session$hint - assign the management role to include this data"
+    Write-Log "$Name is not available in this Exchange session$hint." -Level WARN
+    return $false
+}
+
+function Get-DuplicateDisplayNames {
+    # Pure: display names that appear more than once (case-insensitive).
+    param([object[]]$DisplayNames)
+    return @($DisplayNames | Where-Object { "$_" } | Group-Object |
+        Where-Object { $_.Count -gt 1 } | ForEach-Object { $_.Name } | Sort-Object)
+}
+
+function Resolve-TeamsTenantId {
+    # Pure-ish: resolves the connected Teams tenant GUID. Primary source is the
+    # object returned by Connect-MicrosoftTeams (it exposes TenantId); falls back
+    # to the -GetCsTenant scriptblock (Get-CsTenant). Returns $null when neither
+    # source yields a tenant ID - the caller decides whether to reject.
+    # https://learn.microsoft.com/en-us/powershell/module/teams/connect-microsoftteams
+    param(
+        $ConnectResult,
+        [Parameter(Mandatory)][scriptblock]$GetCsTenant
+    )
+    $id = $null
+    if ($null -ne $ConnectResult -and $ConnectResult.PSObject.Properties['TenantId']) {
+        $id = "$($ConnectResult.TenantId)"
+    }
+    if (-not $id) {
+        try {
+            $csTenant = & $GetCsTenant
+            if ($null -ne $csTenant -and $csTenant.PSObject.Properties['TenantId']) {
+                $id = "$($csTenant.TenantId)"
+            }
+        } catch {
+            Write-Log "Get-CsTenant failed while verifying the Teams tenant: $($_.Exception.Message)" -Level WARN
+        }
+    }
+    if ($id) { return $id }
+    return $null
 }
 
 function Get-GraphReport {
@@ -1461,10 +1558,14 @@ function Invoke-Groups {
     # Planner plans per Microsoft 365 group (Tasks.Read delegated)
     # https://learn.microsoft.com/en-us/graph/api/plannergroup-list-plans
     Invoke-Collector -Name 'PlannerPlans' -ScriptBlock {
+    # Delegated Tasks.Read only returns plans for groups the signed-in user is a
+    # member of - 403 per group is expected, so count and continue; one summary
+    # WARN at the end. Full inventory needs app-only Tasks.Read.All.
+    # https://learn.microsoft.com/en-us/graph/api/plannergroup-list-plans
     $m365Groups = @($rows | Where-Object { $_.GroupType -eq 'Microsoft365' })
     $planRows = [System.Collections.Generic.List[object]]::new()
-    $gi = 0
-    :grp foreach ($g in $m365Groups) {
+    $gi = 0; $planDenied = 0; $planFailed = 0
+    foreach ($g in $m365Groups) {
         $gi++
         if (($gi % 100) -eq 0) { Write-Log "  Planner plans: $gi/$($m365Groups.Count) groups" }
         try {
@@ -1478,13 +1579,15 @@ function Invoke-Groups {
                 })
             }
         } catch {
-            if (Test-GraphForbidden $_) {
-                $script:Summary.skippedSections['Planner'] = "Planner plans not collected (403 - Tasks.Read consent missing?): $($_.Exception.Message)"
-                Write-Log "Planner plans not accessible (403) - remaining groups skipped." -Level WARN
-                break grp
-            }
-            Write-Log "Planner plans for group '$($g.DisplayName)' failed: $($_.Exception.Message)" -Level WARN
+            if (Test-GraphForbidden $_) { $planDenied++ } else { $planFailed++ }
         }
+    }
+    if ($planDenied -gt 0 -or $planFailed -gt 0) {
+        Write-Log "Planner plans: $planDenied of $($m365Groups.Count) groups denied (the account is not a member - delegated Tasks.Read only covers member groups), $planFailed failed. Full inventory needs app-only Tasks.Read.All." -Level WARN
+    }
+    if ($m365Groups.Count -gt 0 -and $planDenied -ge $m365Groups.Count) {
+        $script:CollectorStatusOverride = 'AccessDenied'
+        $script:Summary.skippedSections['Planner'] = "Planner plans denied on all $($m365Groups.Count) groups - delegated Tasks.Read only covers member groups; full inventory needs app-only Tasks.Read.All"
     }
     if ($planRows.Count -gt 0) { Export-CsvSafe -Data $planRows.ToArray() -Name 'PlannerPlans.csv' }
     $script:Summary.metrics.plannerPlanCount = $planRows.Count
@@ -1715,7 +1818,7 @@ function Invoke-Security {
     }
     Invoke-Collector -Name 'GroupLifecyclePolicies' -ScriptBlock {
     try {
-        $lpRows = foreach ($lp in @(Get-GraphAll -Uri 'https://graph.microsoft.com/v1.0/groupLifecyclePolicies?$select=id,groupLifetimeInDays,managedGroupTypes,alternateNotificationEmails')) {
+        $lpRows = foreach ($lp in @(Get-GraphAll -Uri 'https://graph.microsoft.com/v1.0/groupLifecyclePolicies')) {
             [pscustomobject]@{
                 Id                          = $lp.id
                 GroupLifetimeInDays         = $lp.groupLifetimeInDays
@@ -1726,6 +1829,21 @@ function Invoke-Security {
         Export-CsvSafe -Data $lpRows -Name 'GroupLifecyclePolicies.csv'
     } catch {
         if (Test-GraphForbidden $_) { throw }
+        # 400 BadRequest: M365 group expiration needs an Entra P1+ license -
+        # tenants without it get BadRequest, not an empty list.
+        $lpStatus = $null
+        if ($_.Exception.Response) { $lpStatus = [int]$_.Exception.Response.StatusCode }
+        # Only call it NotLicensed when the licence map confirms no Entra ID P1
+        $hasP1 = $null
+        if ($script:LicenseCaps -is [System.Collections.IDictionary] -and $script:LicenseCaps.Contains('entraP1')) { $hasP1 = [bool]$script:LicenseCaps['entraP1'] }
+        elseif ($null -ne $script:LicenseCaps -and $script:LicenseCaps.PSObject.Properties['entraP1']) { $hasP1 = [bool]$script:LicenseCaps.entraP1 }
+        if ($lpStatus -eq 400 -and $hasP1 -eq $false) {
+            $script:CollectorStatusOverride = 'NotLicensed'
+            $script:Summary.skippedSections['GroupLifecyclePolicies'] = "groupLifecyclePolicies returned 400 - group expiration requires Entra ID P1 (no license in the tenant)"
+        } elseif ($lpStatus -eq 400) {
+            $script:CollectorStatusOverride = 'DiscoveryFailed'
+            $script:CollectorErrorOverride  = "groupLifecyclePolicies returned 400 although Entra ID P1 is licensed: $($_.Exception.Message)"
+        }
         Write-Log "groupLifecyclePolicies failed: $($_.Exception.Message)" -Level WARN
     }
     }
@@ -1952,7 +2070,7 @@ function Invoke-Apps {
         Write-Log "oauth2PermissionGrants failed: $($_.Exception.Message)" -Level WARN
     }
     $assignMap = @{}
-    $ai = 0
+    $ai = 0; $araFailed = 0
     foreach ($sp in $nonMsSps) {
         $ai++
         if (($ai % 50) -eq 0) { Write-Log "  appRoleAssignments $ai/$($nonMsSps.Count)" }
@@ -1961,9 +2079,10 @@ function Invoke-Apps {
                 ForEach-Object { @{ resourceId = "$($_.resourceId)"; appRoleId = "$($_.appRoleId)" } })
         } catch {
             $assignMap["$($sp.id)"] = @()
-            Write-Log "appRoleAssignments for '$($sp.displayName)' failed: $($_.Exception.Message)" -Level WARN
+            $araFailed++
         }
     }
+    if ($araFailed -gt 0) { Write-Log "appRoleAssignments failed for $araFailed of $($nonMsSps.Count) service principals." -Level WARN }
     # Resource service principals fetched once each (cache by object id)
     $resourceIds = @(
         ($assignMap.Values | ForEach-Object { $_ } | ForEach-Object { $_.resourceId }) +
@@ -2048,7 +2167,7 @@ function Invoke-Apps {
     # https://learn.microsoft.com/en-us/graph/api/application-list-owners
     Invoke-Collector -Name 'AppOwners' -ScriptBlock {
     $owRows = [System.Collections.Generic.List[object]]::new()
-    $oi = 0
+    $oi = 0; $owFailed = 0
     foreach ($a in $apps) {
         $oi++
         if (($oi % 200) -eq 0) { Write-Log "  App owners: $oi/$($apps.Count) apps" }
@@ -2063,9 +2182,10 @@ function Invoke-Apps {
             }
         } catch {
             if (Test-GraphForbidden $_) { throw }
-            Write-Log "Owners for app '$($a.displayName)' failed: $($_.Exception.Message)" -Level WARN
+            $owFailed++
         }
     }
+    if ($owFailed -gt 0) { Write-Log "App owners failed for $owFailed of $($apps.Count) apps." -Level WARN }
     Export-CsvSafe -Data $owRows.ToArray() -Name 'AppOwners.csv'
     }
 
@@ -2108,6 +2228,7 @@ function Invoke-Apps {
     # https://learn.microsoft.com/en-us/graph/api/synchronization-synchronization-list-jobs
     Invoke-Collector -Name 'ProvisioningJobs' -ScriptBlock {
     $pjRows = [System.Collections.Generic.List[object]]::new()
+    $pjFailed = 0
     foreach ($sp in $nonMsSps) {
         try {
             foreach ($j in @(Get-GraphAll -Uri "https://graph.microsoft.com/v1.0/servicePrincipals/$($sp.id)/synchronization/jobs")) {
@@ -2125,11 +2246,10 @@ function Invoke-Apps {
         } catch {
             if (Test-GraphForbidden $_) { throw }
             # 404 = the app simply has no provisioning - normal, not logged
-            if ($_.Exception.Message -notmatch '404|NotFound|does not exist') {
-                Write-Log "synchronization/jobs for '$($sp.displayName)' failed: $($_.Exception.Message)" -Level WARN
-            }
+            if ($_.Exception.Message -notmatch '404|NotFound|does not exist') { $pjFailed++ }
         }
     }
+    if ($pjFailed -gt 0) { Write-Log "synchronization/jobs failed for $pjFailed of $($nonMsSps.Count) service principals." -Level WARN }
     Export-CsvSafe -Data $pjRows.ToArray() -Name 'ProvisioningJobs.csv'
     }
 }
@@ -2533,11 +2653,12 @@ function Invoke-Exchange {
     Invoke-Collector -Name 'SmtpClientAuth' -ScriptBlock {
     try {
         $tc = Get-TransportConfig -ErrorAction Stop
-        Export-CsvSafe -Data @([pscustomobject]@{ Scope = 'Organization'; Identity = ''; SmtpClientAuthenticationDisabled = $tc.SmtpClientAuthenticationDisabled }) -Name 'SmtpClientAuth.csv'
+        Export-CsvSafe -Data @([pscustomobject]@{ Scope = 'Organization'; Identity = ''; SmtpClientAuthenticationDisabled = $tc.SmtpClientAuthenticationDisabled }) -Name 'SmtpClientAuthOrg.csv'
         $script:SmtpClientAuthOrgDisabled = $tc.SmtpClientAuthenticationDisabled
     } catch { Write-Log "Get-TransportConfig failed: $($_.Exception.Message)" -Level WARN }
     }
     Invoke-Collector -Name 'SmtpClientAuthPerMailbox' -ScriptBlock {
+    if (-not (Test-ExoCmdlet -Name 'Get-CASMailbox')) { return }
     try {
         $smtpMbxRows = [System.Collections.Generic.List[object]]::new()
         foreach ($c in @(Get-CASMailbox -ResultSize Unlimited -ErrorAction Stop)) {
@@ -2548,9 +2669,7 @@ function Invoke-Exchange {
         }
         $smtpMbx = $smtpMbxRows.ToArray()
         if ($smtpMbx.Count -gt 0) {
-            $existing = Join-Path $attachDir 'SmtpClientAuth.csv'
-            if (Test-Path $existing) { $smtpMbx = @(Import-Csv $existing) + $smtpMbx }
-            Export-CsvSafe -Data $smtpMbx -Name 'SmtpClientAuth.csv'
+            Export-CsvSafe -Data $smtpMbx -Name 'SmtpClientAuthMailboxes.csv'
         }
     } catch { Write-Log "Get-CASMailbox failed: $($_.Exception.Message)" -Level WARN }
     }
@@ -2636,7 +2755,8 @@ function Invoke-Exchange {
     # Distribution groups
     $dgRows = foreach ($dg in (Get-DistributionGroup -ResultSize Unlimited)) {
         $mc = $null
-        try { $mc = @(Get-DistributionGroupMember -Identity $dg.Identity -ResultSize Unlimited).Count } catch {}
+        $dgId = if ($dg.Guid) { "$($dg.Guid)" } else { "$($dg.PrimarySmtpAddress)" }
+        try { $mc = @(Get-DistributionGroupMember -Identity $dgId -ResultSize Unlimited).Count } catch {}
         [pscustomobject]@{
             Name              = $dg.DisplayName
             Alias             = $dg.Alias
@@ -2747,6 +2867,7 @@ function Invoke-Exchange {
     # Organization-wide Outlook/Office add-ins (admin-deployed)
     # https://learn.microsoft.com/en-us/powershell/module/exchange/get-app
     Invoke-Collector -Name 'OutlookAddins' -ScriptBlock {
+    if (-not (Test-ExoCmdlet -Name 'Get-App')) { return }
     try {
         $oapps = @(Get-App -OrganizationApp -ErrorAction Stop)
         $oaRows = foreach ($a in $oapps) {
@@ -2769,6 +2890,7 @@ function Invoke-Exchange {
 
     # Inactive + soft-deleted mailboxes - cross-tenant tools do NOT move these
     Invoke-Collector -Name 'InactiveMailboxes' -ScriptBlock {
+    if (-not (Test-ExoCmdlet -Name 'Get-EXOMailbox')) { return }
     try {
         $im = @(Get-EXOMailbox -InactiveMailboxOnly -ResultSize Unlimited -ErrorAction Stop)
         $imRows = foreach ($m in $im) {
@@ -2785,6 +2907,7 @@ function Invoke-Exchange {
     } catch { Write-Log "Inactive mailboxes failed: $($_.Exception.Message)" -Level WARN }
     }
     Invoke-Collector -Name 'SoftDeletedMailboxes' -ScriptBlock {
+    if (-not (Test-ExoCmdlet -Name 'Get-EXOMailbox')) { return }
     try {
         $sd = @(Get-EXOMailbox -SoftDeletedMailbox -ResultSize Unlimited -ErrorAction Stop)
         $sdRows = foreach ($m in $sd) {
@@ -2802,6 +2925,7 @@ function Invoke-Exchange {
 
     # Dynamic distribution groups with their recipient filters
     Invoke-Collector -Name 'DynamicDistributionGroups' -ScriptBlock {
+    if (-not (Test-ExoCmdlet -Name 'Get-DynamicDistributionGroup')) { return }
     try {
         $ddg = @(Get-DynamicDistributionGroup -ResultSize Unlimited -ErrorAction Stop)
         $ddgRows = foreach ($g in $ddg) {
@@ -2825,14 +2949,23 @@ function Invoke-Exchange {
     # Per-DL owner addresses + member count (Advanced). Deep also emits one row
     # per member (MemberUPN). Full member lists are only for -Level Deep.
     Invoke-Collector -Name 'DistributionGroupMembers' -ScriptBlock {
+    if (-not (Test-ExoCmdlet -Name 'Get-DistributionGroupMember')) { return }
     $dgmRows = [System.Collections.Generic.List[object]]::new()
-    foreach ($dg in @(Get-DistributionGroup -ResultSize Unlimited)) {
+    $dgmFailed = 0
+    $dlGroups = @(Get-DistributionGroup -ResultSize Unlimited)
+    # Display names are not unique - -Identity 'IT-avdelningen' fails with
+    # 'matches multiple entries' when two DLs share a name. Use the Guid.
+    $dupNames = @(Get-DuplicateDisplayNames -DisplayNames @($dlGroups | ForEach-Object { "$($_.DisplayName)" }))
+    $script:Summary.metrics.duplicateDistributionGroupNames = $dupNames.Count
+    if ($dupNames.Count -gt 0) { Write-Log "Duplicate distribution group display names: $($dupNames -join ', ')" -Level WARN }
+    foreach ($dg in $dlGroups) {
+        $dgId = if ($dg.Guid) { "$($dg.Guid)" } elseif ($dg.ExternalDirectoryObjectId) { "$($dg.ExternalDirectoryObjectId)" } else { "$($dg.PrimarySmtpAddress)" }
         try {
             $owners = @()
             foreach ($o in @($dg.ManagedBy)) {
                 try { $r = Get-Recipient -Identity "$o" -ErrorAction Stop; $owners += "$($r.PrimarySmtpAddress)" } catch { $owners += "$o" }
             }
-            $members = @(Get-DistributionGroupMember -Identity $dg.Identity -ResultSize Unlimited -ErrorAction Stop)
+            $members = @(Get-DistributionGroupMember -Identity $dgId -ResultSize Unlimited -ErrorAction Stop)
             $dgmRows.Add([pscustomobject]@{
                 Group       = "$($dg.DisplayName)"
                 PrimarySmtpAddress = "$($dg.PrimarySmtpAddress)"
@@ -2854,16 +2987,19 @@ function Invoke-Exchange {
                 }
             }
         } catch {
-            Write-Log "Members for DL '$($dg.DisplayName)' failed: $($_.Exception.Message)" -Level WARN
+            $dgmFailed++
         }
     }
+    if ($dgmFailed -gt 0) { Write-Log "Members for $dgmFailed of $($dlGroups.Count) distribution groups failed." -Level WARN }
     if ($dgmRows.Count -gt 0) { Export-CsvSafe -Data $dgmRows.ToArray() -Name 'DistributionGroupMembers.csv' }
     }
 
     # Calendar processing for room/equipment mailboxes
     Invoke-Collector -Name 'CalendarProcessing' -ScriptBlock {
+    if (-not (Test-ExoCmdlet -Name 'Get-CalendarProcessing')) { return }
     $rooms = @($mailboxes | Where-Object { "$($_.RecipientTypeDetails)" -in 'RoomMailbox','EquipmentMailbox' })
     $cpRows = [System.Collections.Generic.List[object]]::new()
+    $cpFailed = 0
     foreach ($rm in $rooms) {
         try {
             $cp = Get-CalendarProcessing -Identity $rm.ExchangeGuid.Guid -ErrorAction Stop
@@ -2879,13 +3015,15 @@ function Invoke-Exchange {
                 BookInPolicy            = (@($cp.BookInPolicy) -join '; ')
                 RequestInPolicy         = (@($cp.RequestInPolicy) -join '; ')
             })
-        } catch { Write-Log "Get-CalendarProcessing '$($rm.PrimarySmtpAddress)' failed: $($_.Exception.Message)" -Level WARN }
+        } catch { $cpFailed++ }
     }
+    if ($cpFailed -gt 0) { Write-Log "Get-CalendarProcessing failed for $cpFailed of $($rooms.Count) room/equipment mailboxes." -Level WARN }
     if ($cpRows.Count -gt 0) { Export-CsvSafe -Data $cpRows.ToArray() -Name 'CalendarProcessing.csv' }
     }
 
     # Calendar folder permissions (Deep - per-mailbox Get-MailboxFolderPermission)
     Invoke-Collector -Name 'CalendarPermissions' -ScriptBlock {
+    if (-not (Test-ExoCmdlet -Name 'Get-MailboxFolderPermission')) { return }
     $calMbx = @($mailboxes | Where-Object { "$($_.RecipientTypeDetails)" -in 'RoomMailbox','EquipmentMailbox','SharedMailbox','UserMailbox' })
     $cpmRows = [System.Collections.Generic.List[object]]::new()
     $ci = 0
@@ -2908,6 +3046,7 @@ function Invoke-Exchange {
     # Inbox rules that forward/redirect outside the mailbox (Deep; target
     # DOMAINS + rule count only - never rule bodies or full addresses)
     Invoke-Collector -Name 'InboxRuleForwarding' -ScriptBlock {
+    if (-not (Test-ExoCmdlet -Name 'Get-InboxRule')) { return }
     $irRows = [System.Collections.Generic.List[object]]::new()
     $ii = 0
     foreach ($im in $mailboxes) {
@@ -2924,12 +3063,17 @@ function Invoke-Exchange {
 
     # Sharing policies + address-list objects (cheap org-level queries)
     Invoke-Collector -Name 'SharingPolicies' -ScriptBlock {
+    if (-not (Test-ExoCmdlet -Name 'Get-SharingPolicy' -RoleHint 'sharing-policy cmdlets missing')) { return }
     try {
         $sh = @(Get-SharingPolicy -ErrorAction Stop | Select-Object Name, Enabled, Default, Domains)
         if ($sh) { Export-CsvSafe -Data @($sh | ForEach-Object { [pscustomobject]@{ Name = "$($_.Name)"; Enabled = $_.Enabled; Default = $_.Default; Domains = (@($_.Domains) -join '; ') } }) -Name 'SharingPolicies.csv' }
     } catch { Write-Log "Get-SharingPolicy failed: $($_.Exception.Message)" -Level WARN }
     }
     Invoke-Collector -Name 'AddressLists' -ScriptBlock {
+    # Get-AddressList needs the Address Lists management role, which is not in
+    # Organization Management by default - the cmdlet is absent otherwise.
+    # https://learn.microsoft.com/en-us/exchange/address-books/address-lists/address-lists
+    if (-not (Test-ExoCmdlet -Name 'Get-AddressList' -RoleHint 'Address Lists role not assigned (not in Organization Management by default)')) { return }
     try {
         $alRows = @()
         $alRows += @(Get-AddressList -ErrorAction Stop | ForEach-Object { [pscustomobject]@{ Type = 'AddressList'; Name = "$($_.Name)"; RecipientFilter = "$($_.RecipientFilter)"; IsDefault = $false } })
@@ -2942,6 +3086,7 @@ function Invoke-Exchange {
 
     # Exchange MRM retention tags + policies (distinct from Purview retention)
     Invoke-Collector -Name 'MrmRetention' -ScriptBlock {
+    if (-not (Test-ExoCmdlet -Name 'Get-RetentionPolicyTag' -RoleHint 'MRM retention cmdlets missing')) { return }
     try {
         $tags = @(Get-RetentionPolicyTag -ErrorAction Stop | Select-Object Name, Type, AgeLimitForRetention, RetentionAction, RetentionEnabled, Description)
         if ($tags) { Export-CsvSafe -Data $tags -Name 'RetentionPolicyTags.csv' }
@@ -2955,14 +3100,21 @@ function Invoke-Exchange {
     # Application access policies (EWS application scoping) + EXO service
     # principals and their management-role assignments
     Invoke-Collector -Name 'ApplicationAccessPolicies' -ScriptBlock {
+    if (-not (Test-ExoCmdlet -Name 'Get-ApplicationAccessPolicy' -RoleHint 'application access policy cmdlets missing')) { return }
     try {
         $aap = @(Get-ApplicationAccessPolicy -ErrorAction Stop | ForEach-Object {
             [pscustomobject]@{ AppID = "$($_.AppID)"; Description = "$($_.Description)"; AccessRight = "$($_.AccessRight)"; ScopeName = "$($_.ScopeName)"; ScopeIdentity = "$($_.ScopeIdentity)" }
         })
         if ($aap) { Export-CsvSafe -Data $aap -Name 'ApplicationAccessPolicies.csv' }
-    } catch { Write-Log "Get-ApplicationAccessPolicy failed: $($_.Exception.Message)" -Level WARN }
+    } catch {
+        # "couldn't be found on ...\*" = the tenant simply has no policies -> NotInUse
+        if ("$($_.Exception.Message)" -notmatch "couldn't be found|ManagementObjectNotFound") {
+            Write-Log "Get-ApplicationAccessPolicy failed: $($_.Exception.Message)" -Level WARN
+        }
+    }
     }
     Invoke-Collector -Name 'ServicePrincipalRoleAssignments' -ScriptBlock {
+    if (-not (Test-ExoCmdlet -Name 'Get-ServicePrincipal' -RoleHint 'service-principal cmdlets missing')) { return }
     try {
         $exoSps = @(Get-ServicePrincipal -ErrorAction Stop)
         $raRows = [System.Collections.Generic.List[object]]::new()
@@ -2986,6 +3138,7 @@ function Invoke-Exchange {
     # Hybrid indicators: Intra-Organization connectors + hybrid config presence
     Invoke-Collector -Name 'HybridIndicators' -ScriptBlock {
     $hyRows = [System.Collections.Generic.List[object]]::new()
+    if (-not (Test-ExoCmdlet -Name 'Get-IntraOrganizationConnector' -RoleHint 'federation cmdlets missing')) { return }
     try {
         foreach ($ioc in @(Get-IntraOrganizationConnector -ErrorAction Stop)) {
             $hyRows.Add([pscustomobject]@{ Type = 'IntraOrganizationConnector'; Name = "$($ioc.Name)"; Enabled = $ioc.Enabled; TargetAddressDomains = (@($ioc.TargetAddressDomains) -join '; '); DiscoveryEndpoint = "$($ioc.DiscoveryEndpoint)" })
@@ -3249,10 +3402,12 @@ function Invoke-SharePoint {
     }
     }
 
-    # Site collection administrators (Advanced - one Get-SPOUser call per site)
+    # Site collection administrators (Advanced - one Get-SPOUser call per site).
+    # The signed-in account must be site collection admin on each site; denied
+    # sites are aggregated into one summary WARN instead of one per site.
     Invoke-Collector -Name 'SiteAdmins' -ScriptBlock {
     $saRows = [System.Collections.Generic.List[object]]::new()
-    $si = 0
+    $si = 0; $saDenied = 0; $saFailed = 0
     foreach ($s in $sites) {
         $si++
         if (($si % 100) -eq 0) { Write-Log "  SiteAdmins $si/$($sites.Count)" }
@@ -3266,8 +3421,15 @@ function Invoke-SharePoint {
                 })
             }
         } catch {
-            Write-Log "Get-SPOUser failed for $($s.Url): $($_.Exception.Message)" -Level WARN
+            if ("$($_.Exception.Message)" -match 'denied|Forbidden|403') { $saDenied++ } else { $saFailed++ }
         }
+    }
+    if (($saDenied + $saFailed) -gt 0) {
+        Write-Log "Site admins: $($saDenied + $saFailed) of $($sites.Count) sites could not be read ($saDenied denied, $saFailed failed) - the account must be site collection admin on each site, or grant the Sites.FullControl.All application permission and use app-only." -Level WARN
+    }
+    if ($sites.Count -gt 0 -and ($saDenied + $saFailed) -ge $sites.Count) {
+        $script:CollectorStatusOverride = 'AccessDenied'
+        $script:Summary.skippedSections['SiteAdmins'] = "Get-SPOUser denied on all $($sites.Count) sites - the account must be site collection admin on each site"
     }
     if ($saRows.Count -gt 0) { Export-CsvSafe -Data $saRows.ToArray() -Name 'SiteAdmins.csv' }
     }
@@ -3308,7 +3470,7 @@ function Invoke-SharePoint {
         $siteIds = @((Import-Csv (Join-Path $attachDir 'SharePointSites.csv')).SiteId | Where-Object { $_ })
     }
     $listRows = [System.Collections.Generic.List[object]]::new()
-    $li = 0
+    $li = 0; $slFailed = 0
     foreach ($sid in $siteIds) {
         $li++
         if (($li % 100) -eq 0) { Write-Log "  SiteLists $li/$($siteIds.Count)" }
@@ -3324,9 +3486,10 @@ function Invoke-SharePoint {
             }
         } catch {
             if (Test-GraphForbidden $_) { throw }
-            Write-Log "lists for site $sid failed: $($_.Exception.Message)" -Level WARN
+            $slFailed++
         }
     }
+    if ($slFailed -gt 0) { Write-Log "List enumeration failed for $slFailed of $($siteIds.Count) sites." -Level WARN }
     if ($listRows.Count -gt 0) { Export-CsvSafe -Data $listRows.ToArray() -Name 'SiteLists.csv' }
     }
 }
@@ -3809,6 +3972,7 @@ function Invoke-Devices {
     Export-CsvSafe -Data $devRows -Name 'EntraDevices.csv'
 
     if ($intuneLicensed) {
+    Invoke-Collector -Name 'AutopilotDevices' -ScriptBlock {
     try {
         $ap = Get-GraphAll -Uri 'https://graph.microsoft.com/v1.0/deviceManagement/windowsAutopilotDeviceIdentities?$select=id,serialNumber,productKey,groupTag,displayName,manufacturer,model,enrollmentState&$top=999'
         $apRows = @($ap | ForEach-Object {
@@ -3824,8 +3988,17 @@ function Invoke-Devices {
         if ($apRows) { Export-CsvSafe -Data $apRows -Name 'AutopilotDevices.csv' }
         $script:Summary.metrics.autopilotDeviceCount = $apRows.Count
     } catch {
-        Write-Log "Autopilot devices could not be fetched: $($_.Exception.Message)" -Level WARN
-        $script:Summary.metrics.autopilotDeviceCount = 0
+        # autopilotDeviceCount stays unset on failure - 'Unknown', never a false 0
+        $apStatus = $null
+        if ($_.Exception.Response) { $apStatus = [int]$_.Exception.Response.StatusCode }
+        if ($apStatus -eq 500) {
+            Write-Log "Microsoft Graph returned 500 for windowsAutopilotDeviceIdentities on every retry - verify in Intune admin center" -Level WARN
+        } else {
+            Write-Log "Autopilot devices could not be fetched: $($_.Exception.Message)" -Level WARN
+        }
+        $script:CollectorStatusOverride = 'DiscoveryFailed'
+        $script:CollectorErrorOverride  = "$($_.Exception.Message)"
+    }
     }
 
     $policyRows = [System.Collections.Generic.List[object]]::new()
@@ -3919,13 +4092,16 @@ function Invoke-Usage {
     catch { Write-Log "getTeamsDeviceUsageUserDetail failed: $($_.Exception.Message)" -Level WARN }
     }
 
-    # Copilot usage - beta only (getMicrosoft365CopilotUsageUserDetail is not in
-    # v1.0 at the time of writing). Reports.Read.All.
+    # Copilot usage - the report moved to the /copilot path segment and is
+    # available on v1.0 (the old /reports/ beta path returns 400). Periods are
+    # D7/D28/D90/D180/ALL - D30 is not valid. Reports.Read.All + a reports role;
+    # data only covers users with a Microsoft 365 Copilot license.
+    # https://learn.microsoft.com/en-us/microsoft-365/copilot/extensibility/api/admin-settings/reports/copilotreportroot-getmicrosoft365copilotusageuserdetail
     Invoke-Collector -Name 'UsageCopilot' -ScriptBlock {
     try {
         $tmp = Join-Path $env:TEMP ("copilot_{0}.csv" -f [guid]::NewGuid().ToString('N'))
         try {
-            Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/reports/getMicrosoft365CopilotUsageUserDetail(period='D30')" -OutputFilePath $tmp -ErrorAction Stop
+            Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/v1.0/copilot/reports/getMicrosoft365CopilotUsageUserDetail(period='D28')" -OutputFilePath $tmp -ErrorAction Stop
             if ((Test-Path $tmp) -and (Get-Item $tmp).Length -gt 0) {
                 $crows = Import-Csv $tmp
                 if ($crows) { Export-CsvSafe -Data $crows -Name 'UsageCopilot.csv' }
@@ -3933,9 +4109,20 @@ function Invoke-Usage {
             }
         } finally { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
     } catch {
-        if (Test-GraphForbidden $_) { throw }
-        Write-Log "Copilot usage report (beta) failed: $($_.Exception.Message)" -Level WARN
-        $script:Summary.skippedSections['UsageCopilot'] = "Copilot usage report not collected: $($_.Exception.Message)"
+        $cStatus = $null
+        if ($_.Exception.Response) { $cStatus = [int]$_.Exception.Response.StatusCode }
+        if ($cStatus -eq 403) {
+            # Reports.Read.All consent or a supported reports role missing.
+            $script:CollectorStatusOverride = 'NotSupported'
+            $script:Summary.skippedSections['UsageCopilot'] = "Copilot usage report denied (403): $($_.Exception.Message)"
+            Write-Log "Copilot usage report denied (403) - Reports.Read.All / reports admin role missing?" -Level WARN
+        } else {
+            # 400 (or other errors): the report is unavailable for the tenant -
+            # only users with a Microsoft 365 Copilot license appear in it.
+            $script:CollectorStatusOverride = 'NotLicensed'
+            $script:Summary.skippedSections['UsageCopilot'] = "Copilot usage report not collected: $($_.Exception.Message) - the report requires Microsoft 365 Copilot licenses (no license or no Copilot usage in the tenant)"
+            Write-Log "Copilot usage report failed ($($_.Exception.Message)) - likely no Copilot licenses in the tenant." -Level WARN
+        }
     }
     }
 
@@ -4589,9 +4776,8 @@ if ($ServiceGroup) {
                         if ($DisableWAM) { $teamsParams['DisableWAM'] = $true }
                         if ($UseDeviceCode) { $teamsParams['UseDeviceAuthentication'] = $true }
                     }
-                    $null = Connect-MicrosoftTeams @teamsParams
-                    $csTenant = $null
-                    try { $csTenant = (Get-CsTenant -ErrorAction Stop).TenantId } catch {}
+                    $connectResult = Connect-MicrosoftTeams @teamsParams
+                    $csTenant = Resolve-TeamsTenantId -ConnectResult $connectResult -GetCsTenant { Get-CsTenant -ErrorAction Stop }
                     if (-not $csTenant) {
                         Write-Log "Teams tenant could not be verified - rejecting the connection." -Level ERROR
                         try { Disconnect-MicrosoftTeams -ErrorAction SilentlyContinue | Out-Null } catch {}
@@ -4922,19 +5108,8 @@ if (-not $script:Summary.metrics.Contains('concealedReports')) {
 
 # ---- Merge Collectors.<Group>.csv (+ this process's own records) -> Collectors.csv ----
 # A resume re-run can produce several records per collector; keep the latest by CollectedAt.
-$collectorByName = [ordered]@{}
-foreach ($cf in @(Get-ChildItem (Join-Path $outDir 'Collectors.*.csv') -ErrorAction SilentlyContinue | Where-Object { $_.Name -ne 'Collectors.csv' })) {
-    foreach ($row in @(Import-Csv -Path $cf.FullName)) {
-        $cur = $collectorByName[$row.Collector]
-        if (-not $cur -or [datetime]$row.CollectedAt -gt [datetime]$cur.CollectedAt) { $collectorByName[$row.Collector] = $row }
-    }
-}
-foreach ($row in @($script:CollectorRecords)) {
-    $cur = $collectorByName[$row.Collector]
-    if (-not $cur -or [datetime]$row.CollectedAt -gt [datetime]$cur.CollectedAt) { $collectorByName[$row.Collector] = $row }
-}
-if ($collectorByName.Count -gt 0) {
-    $mergedCollectors = @($collectorByName.Values)
+$mergedCollectors = @(Merge-CollectorRecords -AttachDir $attachDir -LegacyDir $outDir -OwnRecords $script:CollectorRecords)
+if ($mergedCollectors.Count -gt 0) {
     Export-CsvSafe -Data $mergedCollectors -Name 'Collectors.csv'
     $script:Summary.collectors = $mergedCollectors
 }

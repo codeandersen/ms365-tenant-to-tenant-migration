@@ -91,12 +91,12 @@
            AdminRoles=@('Exchange Recipient','Global Reader'); AppOnlySupported=$true; RequiredLicence=''; Coverage='Partial';
            DocsUrl='https://learn.microsoft.com/en-us/powershell/module/exchange/get-exomailboxfolderstatistics'; ValidationStatus='NotValidatedLive'; KnownLimitations='Per-mailbox call; NOT included in totalMailboxGB' }
         @{ Name='SmtpClientAuth'; Section='Exchange'; ServiceGroup='Exchange'; Level='Basic'; Workstream='Messaging'; Workload='Exchange Online';
-           Output='SmtpClientAuth.csv'; Cmdlet='Get-TransportConfig'; ApiVersion='PowerShell';
+           Output='SmtpClientAuthOrg.csv'; Cmdlet='Get-TransportConfig'; ApiVersion='PowerShell';
            DelegatedPermissions=@(); ApplicationPermissions=@();
            AdminRoles=@('Exchange Recipient','Global Reader'); AppOnlySupported=$true; RequiredLicence=''; Coverage='Full';
            DocsUrl='https://learn.microsoft.com/en-us/exchange/clients-and-mobile-in-exchange-online/authenticated-client-smtp-submission'; ValidationStatus='NotValidatedLive'; KnownLimitations='Org default only' }
         @{ Name='SmtpClientAuthPerMailbox'; Section='Exchange'; ServiceGroup='Exchange'; Level='Advanced'; Workstream='Messaging'; Workload='Exchange Online';
-           Output='SmtpClientAuth.csv'; Cmdlet='Get-CASMailbox -ResultSize Unlimited'; ApiVersion='PowerShell';
+           Output='SmtpClientAuthMailboxes.csv'; Cmdlet='Get-CASMailbox -ResultSize Unlimited'; ApiVersion='PowerShell';
            DelegatedPermissions=@(); ApplicationPermissions=@();
            AdminRoles=@('Exchange Recipient','Global Reader'); AppOnlySupported=$true; RequiredLicence=''; Coverage='Partial';
            DocsUrl='https://learn.microsoft.com/en-us/powershell/module/exchange/get-casmailbox'; ValidationStatus='NotValidatedLive'; KnownLimitations='Only mailboxes with an explicit override are listed' }
@@ -181,7 +181,7 @@
            Output='SiteAdmins.csv'; Cmdlet='Get-SPOUser -Site <url>'; ApiVersion='PowerShell';
            DelegatedPermissions=@(); ApplicationPermissions=@();
            AdminRoles=@('SharePoint Administrator'); AppOnlySupported=$false; RequiredLicence=''; Coverage='Partial';
-           DocsUrl='https://learn.microsoft.com/en-us/powershell/module/microsoft.online.sharepoint.powershell/get-spouser'; ValidationStatus='NotValidatedLive'; KnownLimitations='One call per site - expensive on large tenants' }
+           DocsUrl='https://learn.microsoft.com/en-us/powershell/module/microsoft.online.sharepoint.powershell/get-spouser'; ValidationStatus='NotValidatedLive'; KnownLimitations='One call per site - expensive on large tenants; the account must be site collection admin on each site, otherwise Get-SPOUser is denied' }
         @{ Name='DeletedOneDrives'; Section='SharePoint'; ServiceGroup='SharePoint'; Level='Basic'; Workstream='Collaboration'; Workload='OneDrive';
            Output='DeletedOneDrives.csv'; Cmdlet='Get-SPODeletedSite -IncludeOnlyPersonalSite'; ApiVersion='PowerShell';
            DelegatedPermissions=@(); ApplicationPermissions=@();

@@ -62,7 +62,7 @@
            DelegatedPermissions=@('Tasks.Read'); ApplicationPermissions=@('Tasks.Read.All');
            AdminRoles=@('Global Reader'); AppOnlySupported=$true; RequiredLicence=''; Coverage='Partial';
            DocsUrl='https://learn.microsoft.com/en-us/graph/api/plannergroup-list-plans'; ValidationStatus='NotValidatedLive';
-           KnownLimitations='Plans only (no tasks/buckets); skipped entirely on 403' }
+           KnownLimitations='Plans only (no tasks/buckets); delegated Tasks.Read only covers groups the account is a member of - full inventory needs app-only Tasks.Read.All' }
 
         # ---- Security (Graph child) ----
         @{ Name='ConditionalAccess'; Section='Security'; ServiceGroup='Graph'; Level='Basic'; Workstream='Security'; Workload='Conditional Access';

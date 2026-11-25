@@ -99,7 +99,8 @@ New/updated collections for the readiness report:
 | `AppOwners.csv`, `AppRedirectUris.csv`, `AppCredentials.csv`, `SamlCertificates.csv`, `ProvisioningJobs.csv` | `/applications/{id}/owners`, `web/spa/publicClient` redirect URIs, `keyCredentials`/`passwordCredentials` (metadata only — never secrets), SAML Verify/Sign certs, `/synchronization/jobs` | expiring credentials and SAML certs are called out in `Readiness.md`; SCIM jobs must be re-created — [Learn](https://learn.microsoft.com/en-us/graph/api/synchronization-synchronization-list-jobs) |
 | `InactiveMailboxes.csv`, `SoftDeletedMailboxes.csv` | `Get-EXOMailbox -InactiveMailboxOnly` / `-SoftDeletedMailbox` | inactive mailboxes are **not moved** by cross-tenant tools — blocker in `Readiness.md` |
 | `DynamicDistributionGroups.csv`, `DistributionGroupMembers.csv` | `Get-DynamicDistributionGroup` (+`Get-DynamicDistributionGroupMember`), `Get-DistributionGroupMember` + `Get-Recipient` | recipient filters must be recreated; member counts + owners (full member lists only at `-Level Deep`) |
-| `SmtpClientAuth.csv` | `Get-TransportConfig` + `Get-CASMailbox` (Advanced) | SMTP AUTH org default + per-mailbox overrides |
+| `SmtpClientAuthOrg.csv` | `Get-TransportConfig` | SMTP AUTH organization default |
+| `SmtpClientAuthMailboxes.csv` | `Get-CASMailbox` (Advanced) | Per-mailbox SMTP AUTH overrides |
 | `MailboxStatistics.csv` | new `RecoverableItemsGB` column (`Get-EXOMailboxFolderStatistics -FolderScope RecoverableItems`, Advanced) | **not** included in totalMailboxGB — reported separately |
 | `Mailboxes.csv` | new columns `LegacyExchangeDN`, `X500Addresses` | proxy addresses needed to re-stamp X500 in the target |
 | `CalendarProcessing.csv`, `CalendarPermissions.csv`, `InboxRuleForwarding.csv` | `Get-CalendarProcessing` (room/equipment), `Get-MailboxFolderPermission` + `Get-InboxRule` (**Deep**) | room mailbox settings; forwarding rules export target **domains + count only** — never rule bodies |
