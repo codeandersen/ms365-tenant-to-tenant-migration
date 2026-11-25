@@ -37,9 +37,26 @@ Each collector records status in `Collectors.csv` (merged into
 `summary.json.collectors`): Success / PartialSuccess / NotInUse / Skipped /
 NotLicensed / AccessDenied / AuthenticationFailed / DiscoveryFailed /
 NotSupported / ManualDiscoveryRequired, with object count, duration and the
-first warnings. The full registry lives in `Collectors.psd1` and is rendered as
+first warnings. Section-level rows (e.g. `Apps`, `Security`) include the
+sub-collectors they wrap: their `ObjectCount` counts sub-collector rows too, but
+their status only reflects the section's own warnings/skips — check the
+individual collector rows for the detail. The full registry lives in
+`Collectors.psd1` and is rendered as
 [docs/Collector-Matrix.md](../docs/Collector-Matrix.md) (regenerate with
 `tools\New-CollectorMatrix.ps1`).
+
+### Troubleshooting
+
+- **Cmdlet errors like `The cloud file provider is not running` (0x8007016A)**:
+  a module lives in an OneDrive-synced folder (e.g.
+  `Documents\PowerShell\Modules`) and its files are cloud-only placeholders.
+  Mark the module folder *Always keep on this device*, or reinstall with
+  `Install-Module <name> -Scope AllUsers`. `tools\Test-ModuleHealth.ps1` flags
+  OneDrive-resident modules.
+- **A long pause between a child process starting and "connected"** is a
+  sign-in window waiting for input — the module sometimes opens it behind
+  other windows. Start the run with `-NewWindow` (each child in its own window)
+  or `-UseDeviceCode` to get a device-code prompt in the console instead.
 
 ## New-InventoryReport.ps1
 

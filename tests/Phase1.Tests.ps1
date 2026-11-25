@@ -8,7 +8,8 @@ BeforeAll {
                'ConvertTo-SamlCertificateRows','ConvertTo-InboxRuleForwarding','Get-DaysToExpiry',
                'Get-UpnDomain','Invoke-Collector','Get-CollectorRegistryEntry','Test-CollectorLevel',
                'Test-GraphForbidden','Test-LicenseGate','Merge-CollectorRecords',
-               'Resolve-TeamsTenantId','Get-DuplicateDisplayNames','Test-ExoCmdlet')
+               'Resolve-TeamsTenantId','Get-DuplicateDisplayNames','Test-ExoCmdlet',
+               'Get-ModuleLoadHint','Test-PathUnderOneDrive')
     $defs = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true) |
         Where-Object { $names -contains $_.Name }
     foreach ($d in $defs) { . ([ScriptBlock]::Create($d.Extent.Text)) }
@@ -140,6 +141,10 @@ Describe 'Invoke-Collector - phase-1 level and licence cases' {
         $script:CollectorRows     = 0
         $script:CollectorStatusOverride = $null
         $script:CollectorErrorOverride  = $null
+        $script:CollectorDepth = 0
+        $script:CollectorNestedThrew = $false
+        $script:CollectorNestedWarnRanges = [System.Collections.Generic.List[object]]::new()
+        $script:CollectorNestedSkips = @{}
         $script:AppOnly           = $false
         $script:Summary.skippedSections = @{}
         $script:Level = 'Advanced'
@@ -230,6 +235,10 @@ Describe 'Test-ExoCmdlet' {
     BeforeEach {
         $script:CollectorStatusOverride = $null
         $script:CollectorErrorOverride  = $null
+        $script:CollectorDepth = 0
+        $script:CollectorNestedThrew = $false
+        $script:CollectorNestedWarnRanges = [System.Collections.Generic.List[object]]::new()
+        $script:CollectorNestedSkips = @{}
         $script:Summary.skippedSections = @{}
     }
     It 'returns $true when the cmdlet exists' {
@@ -262,6 +271,10 @@ Describe 'Invoke-Collector - aggregated-failure and not-found classification' {
         $script:CollectorRows     = 0
         $script:CollectorStatusOverride = $null
         $script:CollectorErrorOverride  = $null
+        $script:CollectorDepth = 0
+        $script:CollectorNestedThrew = $false
+        $script:CollectorNestedWarnRanges = [System.Collections.Generic.List[object]]::new()
+        $script:CollectorNestedSkips = @{}
         $script:AppOnly           = $false
         $script:Summary.skippedSections = @{}
         $script:Level = 'Deep'
@@ -293,5 +306,94 @@ Describe 'Invoke-Collector - aggregated-failure and not-found classification' {
             }
         }
         $script:CollectorRecords[0].Status | Should -Be 'NotInUse'
+    }
+}
+
+Describe 'Invoke-Collector - No-data warnings and nested attribution' {
+    BeforeEach {
+        $script:CollectorRecords  = [System.Collections.Generic.List[object]]::new()
+        $script:CollectorWarnings = [System.Collections.Generic.List[string]]::new()
+        $script:CollectorRows     = 0
+        $script:CollectorStatusOverride = $null
+        $script:CollectorErrorOverride  = $null
+        $script:CollectorDepth = 0
+        $script:CollectorNestedThrew = $false
+        $script:CollectorNestedWarnRanges = [System.Collections.Generic.List[object]]::new()
+        $script:CollectorNestedSkips = @{}
+        $script:AppOnly           = $false
+        $script:Summary.skippedSections = @{}
+        $script:Level = 'Deep'
+    }
+
+    It 'records NotInUse when the only warning is "No data for X.csv"' {
+        Invoke-Collector -Name 'HubSites' -ScriptBlock {
+            $script:CollectorWarnings.Add('[WARN] No data for HubSites.csv')
+        }
+        $script:CollectorRecords[0].Status | Should -Be 'NotInUse'
+    }
+
+    It 'outer section does not inherit a nested licence-gated outcome' {
+        Invoke-Collector -Name 'Tenant' -ScriptBlock {
+            Invoke-Collector -Name 'PimAssignments' -ScriptBlock {
+                $script:Summary.skippedSections['PIM'] = 'Not collected: no license for Entra ID P2'
+            }
+            $script:CollectorRows += 3
+        }
+        ($script:CollectorRecords | Where-Object Collector -eq 'PimAssignments').Status | Should -Be 'NotLicensed'
+        ($script:CollectorRecords | Where-Object Collector -eq 'Tenant').Status | Should -Be 'Success'
+    }
+
+    It 'nested throw that the outer catches -> outer PartialSuccess' {
+        Invoke-Collector -Name 'Tenant' -ScriptBlock {
+            try { Invoke-Collector -Name 'HubSites' -ScriptBlock { throw 'Graph broke' } } catch {}
+            $script:CollectorRows += 3
+        }
+        ($script:CollectorRecords | Where-Object Collector -eq 'HubSites').Status | Should -Be 'DiscoveryFailed'
+        ($script:CollectorRecords | Where-Object Collector -eq 'Tenant').Status | Should -Be 'PartialSuccess'
+    }
+
+    It 'nested warnings do not propagate to the outer status' {
+        Invoke-Collector -Name 'Tenant' -ScriptBlock {
+            Invoke-Collector -Name 'SiteAdmins' -ScriptBlock {
+                $script:CollectorWarnings.Add('[WARN] Site admins: 3 of 5 sites denied')
+                $script:CollectorRows += 2
+            }
+            $script:CollectorRows += 1
+        }
+        ($script:CollectorRecords | Where-Object Collector -eq 'SiteAdmins').Status | Should -Be 'PartialSuccess'
+        ($script:CollectorRecords | Where-Object Collector -eq 'Tenant').Status | Should -Be 'Success'
+    }
+}
+
+Describe 'Get-ModuleLoadHint' {
+    It 'returns the OneDrive hint for cloud-file-provider errors' {
+        Get-ModuleLoadHint -Message 'Could not load file or assembly. The cloud file provider is not running. (0x8007016A)' |
+            Should -Match 'Always keep on this device'
+        Get-ModuleLoadHint -Message 'error 0x8007016A' | Should -Not -BeNullOrEmpty
+    }
+    It 'returns $null for ordinary errors' {
+        Get-ModuleLoadHint -Message 'Access is denied' | Should -BeNullOrEmpty
+        Get-ModuleLoadHint -Message '' | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Test-PathUnderOneDrive (Test-ModuleHealth helper)' {
+    BeforeAll {
+        $tool = Join-Path $PSScriptRoot '..\tools\Test-ModuleHealth.ps1'
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($tool, [ref]$null, [ref]$null)
+        $def = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true) |
+            Where-Object { $_.Name -eq 'Test-PathUnderOneDrive' }
+        . ([ScriptBlock]::Create($def.Extent.Text))
+    }
+    It 'detects paths under a OneDrive root' {
+        $roots = @('C:\Users\me\OneDrive - Contoso')
+        Test-PathUnderOneDrive -Path 'C:\Users\me\OneDrive - Contoso\Documents\PowerShell\Modules\MicrosoftTeams' -OneDriveRoots $roots |
+            Should -BeTrue
+    }
+    It 'rejects paths outside all roots' {
+        $roots = @('C:\Users\me\OneDrive - Contoso')
+        Test-PathUnderOneDrive -Path 'C:\Program Files\PowerShell\Modules\MicrosoftTeams' -OneDriveRoots $roots |
+            Should -BeFalse
+        Test-PathUnderOneDrive -Path 'C:\Users\me\OneDriveish\Modules' -OneDriveRoots $roots | Should -BeFalse
     }
 }

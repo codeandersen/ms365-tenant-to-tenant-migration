@@ -292,6 +292,10 @@ $script:CollectorWarnings = [System.Collections.Generic.List[string]]::new()
 $script:CollectorRows     = 0
 $script:CollectorStatusOverride = $null
 $script:CollectorErrorOverride  = $null
+$script:CollectorDepth          = 0
+$script:CollectorNestedThrew    = $false
+$script:CollectorNestedWarnRanges = [System.Collections.Generic.List[object]]::new()
+$script:CollectorNestedSkips    = @{}
 
 function Get-CollectorRegistryEntry {
     param([string]$Name)
@@ -357,29 +361,79 @@ function Invoke-Collector {
     # Never inherit an override left behind by a previous collector that threw
     $script:CollectorStatusOverride = $null
     $script:CollectorErrorOverride  = $null
+    # Nested-attribution state (init defensively so the function also works when
+    # loaded standalone in tests).
+    if ($null -eq $script:CollectorDepth)           { $script:CollectorDepth = 0 }
+    if ($null -eq $script:CollectorNestedWarnRanges){ $script:CollectorNestedWarnRanges = [System.Collections.Generic.List[object]]::new() }
+    if ($null -eq $script:CollectorNestedSkips)     { $script:CollectorNestedSkips = @{} }
+
     $warnStart  = $script:CollectorWarnings.Count
     $skipBefore = @($script:Summary.skippedSections.Keys)
     $rowsBefore = $script:CollectorRows
+    # Nesting: warnings and skippedSections produced while a NESTED collector
+    # runs are attributed to that nested collector only. The outer status is
+    # computed from its own warnings/skips - plus a nested throw -> PartialSuccess.
+    $isNested        = $script:CollectorDepth -gt 0
+    $nestedThrewIn   = $script:CollectorNestedThrew
+    $nestedRangeIn   = @($script:CollectorNestedWarnRanges).Count
+    $script:CollectorDepth++
+    $nestedThrewOut  = $false
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     try {
-        & $ScriptBlock
-    } catch {
-        $sw.Stop()
-        $rec.DurationSeconds = [math]::Round($sw.Elapsed.TotalSeconds, 1)
-        $msg = $_.Exception.Message
-        $rec.Errors = $msg
-        if (Test-GraphForbidden $_)                                     { $rec.Status = 'AccessDenied' }
-        elseif ($msg -match 'Authentication needed|AADSTS|token|auth')  { $rec.Status = 'AuthenticationFailed' }
-        else                                                            { $rec.Status = 'DiscoveryFailed' }
-        $rec.Completeness = 'Unknown'
-        $rec.Warnings = (@($script:CollectorWarnings | Select-Object -Skip $warnStart | Select-Object -First 3)) -join ' | '
-        $script:CollectorRecords.Add([pscustomobject]$rec)
-        throw
+        try {
+            & $ScriptBlock
+        } catch {
+            $sw.Stop()
+            $rec.DurationSeconds = [math]::Round($sw.Elapsed.TotalSeconds, 1)
+            $msg = $_.Exception.Message
+            $rec.Errors = $msg
+            if (Test-GraphForbidden $_)                                     { $rec.Status = 'AccessDenied' }
+            elseif ($msg -match 'Authentication needed|AADSTS|token|auth')  { $rec.Status = 'AuthenticationFailed' }
+            else                                                            { $rec.Status = 'DiscoveryFailed' }
+            $rec.Completeness = 'Unknown'
+            $rec.Warnings = (@($script:CollectorWarnings | Select-Object -Skip $warnStart | Select-Object -First 3)) -join ' | '
+            $script:CollectorRecords.Add([pscustomobject]$rec)
+            if ($isNested) {
+                # Attribute my consumed warnings/skips to me, and flag the throw
+                # for the outer collector (outer -> PartialSuccess if it survives).
+                $script:CollectorNestedThrew = $true
+                $script:CollectorNestedWarnRanges.Add(@($warnStart, $script:CollectorWarnings.Count))
+                foreach ($k in @($script:Summary.skippedSections.Keys | Where-Object { $skipBefore -notcontains $_ })) {
+                    $script:CollectorNestedSkips[$k] = $true
+                }
+            }
+            throw
+        }
+    } finally {
+        $nestedThrewOut = $script:CollectorNestedThrew -and -not $nestedThrewIn
+        # Consume the flag at the outermost level; while nested, propagate it
+        # upward so the outermost collector also sees it.
+        $script:CollectorNestedThrew = $nestedThrewIn -or ($nestedThrewOut -and $isNested)
+        $script:CollectorDepth--
     }
     $sw.Stop()
     $rec.DurationSeconds = [math]::Round($sw.Elapsed.TotalSeconds, 1)
-    $newSkips  = @($script:Summary.skippedSections.Keys | Where-Object { $skipBefore -notcontains $_ })
-    $newWarns  = @($script:CollectorWarnings | Select-Object -Skip $warnStart | Where-Object { "$_".StartsWith('[WARN]') })
+    $allNewSkips = @($script:Summary.skippedSections.Keys | Where-Object { $skipBefore -notcontains $_ })
+    # Own skips = keys not already attributed to a deeper nested collector.
+    $newSkips  = @($allNewSkips | Where-Object { -not $script:CollectorNestedSkips.ContainsKey($_) })
+    # Own warnings = warnings in my window that are not inside a deeper nested
+    # range.
+    $nestedRanges = @($script:CollectorNestedWarnRanges | Select-Object -Skip $nestedRangeIn)
+    $ownWarnIdx = for ($wi = $warnStart; $wi -lt $script:CollectorWarnings.Count; $wi++) {
+        $insideNested = $false
+        foreach ($rg in $nestedRanges) { if ($wi -ge $rg[0] -and $wi -lt $rg[1]) { $insideNested = $true; break } }
+        if (-not $insideNested) { $wi }
+    }
+    $newWarns  = @($ownWarnIdx | ForEach-Object { "$($script:CollectorWarnings[$_])" } | Where-Object { $_.StartsWith('[WARN]') })
+    # 'No data for X.csv' is informational - empty output alone is NotInUse,
+    # not PartialSuccess.
+    $statusWarns = @($newWarns | Where-Object { $_ -notmatch '^\[WARN\] No data for ' })
+    # Attribute this (nested) collector's own warnings/skips so outer collectors
+    # do not inherit them.
+    if ($isNested) {
+        $script:CollectorNestedWarnRanges.Add(@($warnStart, $script:CollectorWarnings.Count))
+        foreach ($k in $newSkips) { $script:CollectorNestedSkips[$k] = $true }
+    }
     $rec.Warnings    = (@($newWarns | Select-Object -First 3)) -join ' | '
     $rec.ObjectCount = $script:CollectorRows - $rowsBefore
     if ($script:CollectorStatusOverride) {
@@ -396,7 +450,9 @@ function Invoke-Collector {
     } elseif ($newSkips.Count -gt 0) {
         $rec.Status = 'Skipped'
         if (-not $rec.Warnings) { $rec.Warnings = (@($newSkips | ForEach-Object { "${_}: $($script:Summary.skippedSections[$_])" }) | Select-Object -First 3) -join ' | ' }
-    } elseif ($newWarns.Count -gt 0) {
+    } elseif ($statusWarns.Count -gt 0 -or $nestedThrewOut) {
+        # A nested collector that threw (and was caught by my block) or own
+        # warnings -> PartialSuccess.
         $rec.Status = 'PartialSuccess'
     } elseif ($rec.ObjectCount -eq 0) {
         $rec.Status = 'NotInUse'
@@ -840,6 +896,35 @@ function Get-DuplicateDisplayNames {
     param([object[]]$DisplayNames)
     return @($DisplayNames | Where-Object { "$_" } | Group-Object |
         Where-Object { $_.Count -gt 1 } | ForEach-Object { $_.Name } | Sort-Object)
+}
+
+function Get-ModuleLoadHint {
+    # Returns a remediation hint when the error is the OneDrive files-on-demand
+    # failure (0x8007016A 'The cloud file provider is not running') - module
+    # files synced as cloud-only placeholders fail to load. $null otherwise.
+    param([string]$Message)
+    if ("$Message" -match '0x8007016A|cloud file provider') {
+        return "The module files are OneDrive cloud-only placeholders - mark the module folder 'Always keep on this device' or reinstall with Install-Module <name> -Scope AllUsers"
+    }
+    return $null
+}
+
+function Test-PathUnderOneDrive {
+    # Pure: $true when -Path sits under any of the given OneDrive roots
+    # (typically $env:OneDrive, $env:OneDriveCommercial, $env:OneDriveConsumer).
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [object[]]$OneDriveRoots
+    )
+    $p = $Path.TrimEnd('\','/')
+    foreach ($r in @($OneDriveRoots)) {
+        if (-not $r) { continue }
+        $root = "$r".TrimEnd('\','/')
+        if ($p.StartsWith($root + '\', [System.StringComparison]::OrdinalIgnoreCase) -or
+            $p.StartsWith($root + '/', [System.StringComparison]::OrdinalIgnoreCase) -or
+            $p.Equals($root, [System.StringComparison]::OrdinalIgnoreCase)) { return $true }
+    }
+    return $false
 }
 
 function Resolve-TeamsTenantId {
@@ -3913,6 +3998,11 @@ function Invoke-TeamsConfig {
         return
     }
     Invoke-Collector -Name 'TeamsFederation' -ScriptBlock {
+    if (-not (Get-Command Get-CsTenantFederationConfiguration -ErrorAction SilentlyContinue)) {
+        $script:CollectorStatusOverride = 'NotSupported'
+        $script:Summary.skippedSections['TeamsFederation'] = 'Get-CsTenantFederationConfiguration missing from this MicrosoftTeams version'
+        return
+    }
     try {
         $fed = Get-CsTenantFederationConfiguration -ErrorAction Stop
         $fedRows = @([pscustomobject]@{
@@ -3923,10 +4013,16 @@ function Invoke-TeamsConfig {
             TreatDiscoveredPartnersAsUnverified = "$($fed.TreatDiscoveredPartnersAsUnverified)"
         })
         Export-CsvSafe -Data $fedRows -Name 'TeamsFederation.csv'
-    } catch { Write-Log "Get-CsTenantFederationConfiguration failed: $($_.Exception.Message)" -Level WARN }
+    } catch {
+        $modHint = Get-ModuleLoadHint -Message "$($_.Exception.Message)"
+        Write-Log "Get-CsTenantFederationConfiguration failed: $($_.Exception.Message)$(if ($modHint) { " $modHint" })" -Level WARN
+        if ($modHint) { $script:CollectorStatusOverride = 'DiscoveryFailed'; $script:CollectorErrorOverride = $modHint }
+    }
     }
     Invoke-Collector -Name 'TeamsGuestConfig' -ScriptBlock {
     $gcRows = [System.Collections.Generic.List[object]]::new()
+    $gcMissing = 0
+    if (-not (Get-Command Get-CsTeamsClientConfiguration -ErrorAction SilentlyContinue)) { $gcMissing++ } else {
     try {
         $cc = Get-CsTeamsClientConfiguration -ErrorAction Stop
         $gcRows.Add([pscustomobject]@{
@@ -3941,7 +4037,13 @@ function Invoke-TeamsConfig {
             AllowEgnyte                    = $cc.AllowEgnyte
             AllowOrganizationTab           = "$($cc.AllowOrganizationTab)"
         })
-    } catch { Write-Log "Get-CsTeamsClientConfiguration failed: $($_.Exception.Message)" -Level WARN }
+    } catch {
+        $modHint = Get-ModuleLoadHint -Message "$($_.Exception.Message)"
+        Write-Log "Get-CsTeamsClientConfiguration failed: $($_.Exception.Message)$(if ($modHint) { " $modHint" })" -Level WARN
+        if ($modHint) { $script:CollectorStatusOverride = 'DiscoveryFailed'; $script:CollectorErrorOverride = $modHint }
+    }
+    }
+    if (-not (Get-Command Get-CsTeamsGuestMeetingConfiguration -ErrorAction SilentlyContinue)) { $gcMissing++ } else {
     try {
         $gm = Get-CsTeamsGuestMeetingConfiguration -ErrorAction Stop
         $gcRows.Add([pscustomobject]@{
@@ -3958,7 +4060,13 @@ function Invoke-TeamsConfig {
             ScreenSharingMode              = "$($gm.ScreenSharingMode)"
             AllowMeetNow                   = "$($gm.AllowMeetNow)"
         })
-    } catch { Write-Log "Get-CsTeamsGuestMeetingConfiguration failed: $($_.Exception.Message)" -Level WARN }
+    } catch {
+        $modHint = Get-ModuleLoadHint -Message "$($_.Exception.Message)"
+        Write-Log "Get-CsTeamsGuestMeetingConfiguration failed: $($_.Exception.Message)$(if ($modHint) { " $modHint" })" -Level WARN
+        if ($modHint) { $script:CollectorStatusOverride = 'DiscoveryFailed'; $script:CollectorErrorOverride = $modHint }
+    }
+    }
+    if (-not (Get-Command Get-CsTeamsGuestMessagingConfiguration -ErrorAction SilentlyContinue)) { $gcMissing++ } else {
     try {
         $gm2 = Get-CsTeamsGuestMessagingConfiguration -ErrorAction Stop
         $gcRows.Add([pscustomobject]@{
@@ -3979,29 +4087,57 @@ function Invoke-TeamsConfig {
             AllowStickers                  = "$($gm2.AllowStickers)"
             AllowGiphy                     = "$($gm2.AllowGiphy)"
         })
-    } catch { Write-Log "Get-CsTeamsGuestMessagingConfiguration failed: $($_.Exception.Message)" -Level WARN }
+    } catch {
+        $modHint = Get-ModuleLoadHint -Message "$($_.Exception.Message)"
+        Write-Log "Get-CsTeamsGuestMessagingConfiguration failed: $($_.Exception.Message)$(if ($modHint) { " $modHint" })" -Level WARN
+        if ($modHint) { $script:CollectorStatusOverride = 'DiscoveryFailed'; $script:CollectorErrorOverride = $modHint }
+    }
+    }
+    if ($gcMissing -ge 3) {
+        $script:CollectorStatusOverride = 'NotSupported'
+        $script:Summary.skippedSections['TeamsGuestConfig'] = 'Guest configuration cmdlets missing from this MicrosoftTeams version'
+    } elseif ($gcMissing -gt 0) {
+        Write-Log "Teams guest config: $gcMissing cmdlet(s) missing from this MicrosoftTeams version." -Level WARN
+    }
     if ($gcRows.Count -gt 0) { Export-CsvSafe -Data $gcRows.ToArray() -Name 'TeamsGuestConfig.csv' }
     }
     # Policy inventory (names only - per-policy user assignment counts need a
     # per-user Get-CsOnlineUser pass, which is too heavy for an inventory).
     Invoke-Collector -Name 'TeamsPolicies' -ScriptBlock {
     $polRows = [System.Collections.Generic.List[object]]::new()
-    foreach ($p in @(
-        @{ Type = 'MeetingPolicy';      Cmd = { Get-CsTeamsMeetingPolicy -ErrorAction Stop } },
-        @{ Type = 'MessagingPolicy';    Cmd = { Get-CsTeamsMessagingPolicy -ErrorAction Stop } },
-        @{ Type = 'AppSetupPolicy';     Cmd = { Get-CsTeamsAppSetupPolicy -ErrorAction Stop } },
-        @{ Type = 'AppPermissionPolicy';Cmd = { Get-CsTeamsAppPermissionPolicy -ErrorAction Stop } },
-        @{ Type = 'CallingPolicy';      Cmd = { Get-CsTeamsCallingPolicy -ErrorAction Stop } },
-        @{ Type = 'UpdatePolicy';       Cmd = { Get-CsTeamsUpdatePolicy -ErrorAction Stop } }
-    )) {
+    # https://learn.microsoft.com/en-us/powershell/module/teams/ - policy cmdlets.
+    # Get-CsTeamsUpdatePolicy does not exist; the update policy cmdlet is
+    # Get-CsTeamsUpdateManagementPolicy (see Learn). A cmdlet missing from the
+    # session is recorded as NotSupported for that sub-item, not an error.
+    $polDefs = @(
+        @{ Type = 'MeetingPolicy';      Cmdlet = 'Get-CsTeamsMeetingPolicy' },
+        @{ Type = 'MessagingPolicy';    Cmdlet = 'Get-CsTeamsMessagingPolicy' },
+        @{ Type = 'AppSetupPolicy';     Cmdlet = 'Get-CsTeamsAppSetupPolicy' },
+        @{ Type = 'AppPermissionPolicy';Cmdlet = 'Get-CsTeamsAppPermissionPolicy' },
+        @{ Type = 'CallingPolicy';      Cmdlet = 'Get-CsTeamsCallingPolicy' },
+        @{ Type = 'UpdatePolicy';       Cmdlet = 'Get-CsTeamsUpdateManagementPolicy' }
+    )
+    $missingCmdlets = [System.Collections.Generic.List[string]]::new()
+    foreach ($p in $polDefs) {
+        if (-not (Get-Command $p.Cmdlet -ErrorAction SilentlyContinue)) { $missingCmdlets.Add($p.Cmdlet); continue }
         try {
-            foreach ($pol in @(& $p.Cmd)) {
+            foreach ($pol in @(& ([scriptblock]::Create("$($p.Cmdlet) -ErrorAction Stop")))) {
                 $polRows.Add([pscustomobject]@{
                     PolicyType = $p.Type
                     PolicyName = "$($pol.Identity)"
                 })
             }
-        } catch { Write-Log "$($p.Type) list failed: $($_.Exception.Message)" -Level WARN }
+        } catch {
+            $modHint = Get-ModuleLoadHint -Message "$($_.Exception.Message)"
+            Write-Log "$($p.Cmdlet) failed: $($_.Exception.Message)$(if ($modHint) { " $modHint" })" -Level WARN
+            if ($modHint) { $script:CollectorErrorOverride = $modHint }
+        }
+    }
+    if ($missingCmdlets.Count -ge $polDefs.Count) {
+        $script:CollectorStatusOverride = 'NotSupported'
+        $script:Summary.skippedSections['TeamsPolicies'] = "Teams policy cmdlets missing from this MicrosoftTeams version: $($missingCmdlets -join ', ')"
+    } elseif ($missingCmdlets.Count -gt 0) {
+        Write-Log "Teams policy cmdlets missing from this MicrosoftTeams version (skipped): $($missingCmdlets -join ', ')" -Level WARN
     }
     if ($polRows.Count -gt 0) { Export-CsvSafe -Data $polRows.ToArray() -Name 'TeamsPolicies.csv' }
     }
@@ -4705,7 +4841,8 @@ if ($ServiceGroup) {
                         }
                     }
                 } catch {
-                    Write-Log "Connect-MgGraph failed: $($_.Exception.Message)" -Level ERROR
+                    $modHint = Get-ModuleLoadHint -Message "$($_.Exception.Message)"
+                    Write-Log "Connect-MgGraph failed: $($_.Exception.Message)$(if ($modHint) { " $modHint" })" -Level ERROR
                     $script:Summary.failedSections['GraphLogin'] = "Connect-MgGraph failed: $($_.Exception.Message)"
                     foreach ($s in $toRun) { $script:Summary.failedSections[$s] = "Connect-MgGraph failed: $($_.Exception.Message)" }
                     $toRun = @()
@@ -4758,6 +4895,8 @@ if ($ServiceGroup) {
                     }
                 } catch {
                     $wamHint = if ($_.Exception.Message -match 'WAM|broker|InteractiveBrowser') { ' Possible WAM/broker error - try -DisableWAM.' } else { '' }
+                    $modHint = Get-ModuleLoadHint -Message "$($_.Exception.Message)"
+                    if ($modHint) { $wamHint = "$wamHint $modHint" }
                     if ($script:GuestMode) {
                         Write-Log "Connect-ExchangeOnline failed as guest: $($_.Exception.Message).$wamHint" -Level WARN
                         Write-Log "Exchange Online PowerShell does not necessarily support B2B guest administrators (DelegatedOrganization is documented for CSP/GDAP). Use a member account in Contoso for full Exchange data. Graph fallback is used." -Level WARN
@@ -4802,6 +4941,8 @@ if ($ServiceGroup) {
                         }
                     } catch {
                         $wamHint = if ($_.Exception.Message -match 'WAM|broker|InteractiveBrowser') { ' Possible WAM/broker error - try -DisableWAM.' } else { '' }
+                        $modHint = Get-ModuleLoadHint -Message "$($_.Exception.Message)"
+                        if ($modHint) { $wamHint = "$wamHint $modHint" }
                         if ($script:GuestMode) {
                             Write-Log "Connect-IPPSSession failed as guest: $($_.Exception.Message).$wamHint Exchange Online PowerShell does not necessarily support B2B guest administrators - Graph fallback (eDiscovery) is used." -Level WARN
                         } else {
@@ -4862,6 +5003,8 @@ if ($ServiceGroup) {
                         Write-Log "SharePoint Online connected ($spoUrl)."
                     } else {
                         Write-Log "Connect-SPOService failed: $spoErr - sections deferred to the Graph fallback." -Level WARN
+                        $modHint = Get-ModuleLoadHint -Message $spoErr
+                        if ($modHint) { Write-Log $modHint -Level WARN }
                         if ($spoErr -match 'OAuth|authentication session') {
                             Write-Log "Hint: 'No valid OAuth 2.0 authentication session exists' is a known SPO module sign-in issue - a rerun usually resolves it; the account also needs the SharePoint Administrator role." -Level WARN
                         }
@@ -4911,6 +5054,8 @@ if ($ServiceGroup) {
                     }
                 } catch {
                     $wamHint = if ($_.Exception.Message -match 'WAM|broker|InteractiveBrowser') { ' Possible WAM/broker error - try -DisableWAM.' } else { '' }
+                    $modHint = Get-ModuleLoadHint -Message "$($_.Exception.Message)"
+                    if ($modHint) { $wamHint = "$wamHint $modHint" }
                     Write-Log "Connect-MicrosoftTeams failed: $($_.Exception.Message).$wamHint" -Level WARN
                     $script:Summary.failedSections['TeamsPhone'] = "Connect-MicrosoftTeams failed: $($_.Exception.Message)"
                     $toRun = @()
@@ -4961,7 +5106,8 @@ if ($ServiceGroup) {
                         Write-Log "Power Platform connected (tenant: $ppTenantId)."
                     }
                 } catch {
-                    Write-Log "Add-PowerAppsAccount failed: $($_.Exception.Message)" -Level WARN
+                    $modHint = Get-ModuleLoadHint -Message "$($_.Exception.Message)"
+                    Write-Log "Add-PowerAppsAccount failed: $($_.Exception.Message)$(if ($modHint) { " $modHint" })" -Level WARN
                     $script:Summary.failedSections['PowerPlatform'] = "Add-PowerAppsAccount failed: $($_.Exception.Message)"
                     $toRun = @()
                 }

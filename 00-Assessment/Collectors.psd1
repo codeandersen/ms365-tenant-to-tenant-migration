@@ -1,5 +1,7 @@
 # Collector registry for Collect-TenantInventory.ps1
 # One entry per CSV output (or sub-collection) plus manual-discovery workloads.
+# Section rows (Section-level collectors that wrap sub-collectors) include the
+# nested rows in their ObjectCount - check the sub-collector rows for detail.
 # Fields:
 #   Name            unique collector name
 #   Section         inventory section it belongs to

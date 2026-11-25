@@ -82,6 +82,22 @@ $results = [System.Collections.Generic.List[object]]::new()
 function Add-Check($Area, $Item, $Result, $Detail) {
     $results.Add([pscustomobject]@{ Area = $Area; Item = $Item; Result = $Result; Detail = $Detail })
 }
+function Test-PathUnderOneDrive {
+    # $true when -Path sits under any of the given OneDrive roots.
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [object[]]$OneDriveRoots
+    )
+    $p = $Path.TrimEnd('\','/')
+    foreach ($r in @($OneDriveRoots)) {
+        if (-not $r) { continue }
+        $root = "$r".TrimEnd('\','/')
+        if ($p.StartsWith($root + '\', [System.StringComparison]::OrdinalIgnoreCase) -or
+            $p.StartsWith($root + '/', [System.StringComparison]::OrdinalIgnoreCase) -or
+            $p.Equals($root, [System.StringComparison]::OrdinalIgnoreCase)) { return $true }
+    }
+    return $false
+}
 function Get-Versions($Name) {
     # Both sources: Get-Module sees every copy on PSModulePath; Get-InstalledModule only what PowerShellGet installed.
     $v = @(Get-Module -ListAvailable -Name $Name -ErrorAction SilentlyContinue | ForEach-Object { $_.Version })
@@ -195,6 +211,34 @@ if ($CrossTenantMigrationModulePath) {
 }
 else {
     Add-Check 'Modules' 'CrossTenantMigration' 'PASS' 'Skipped - pass -CrossTenantMigrationModulePath to verify the expanded NuGet module imports (needed only for 02-TenantPrep -Step MigrationApps).'
+}
+
+# ------------------------------------------------------------ OneDrive files-on-demand check
+# Modules installed under an OneDrive-synced folder (e.g. Documents\PowerShell\Modules)
+# can be cloud-only placeholders: they load fine until the provider is not running,
+# then every cmdlet fails with 0x8007016A 'The cloud file provider is not running'.
+$oneDriveRoots = @($env:OneDrive, $env:OneDriveCommercial, $env:OneDriveConsumer) | Where-Object { $_ }
+if ($oneDriveRoots) {
+    $checkedModules = @('Microsoft.Graph.*') + @($moduleUse.Keys)
+    foreach ($pat in $checkedModules) {
+        foreach ($m in @(Get-Module -ListAvailable -Name $pat -ErrorAction SilentlyContinue)) {
+            $base = "$($m.ModuleBase)"
+            if (-not $base) { continue }
+            if (-not (Test-PathUnderOneDrive -Path $base -OneDriveRoots $oneDriveRoots)) { continue }
+            # FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS (0x400000) or OFFLINE (0x1000)
+            # mark files that are cloud-only placeholders.
+            $cloudOnly = $false
+            try {
+                foreach ($f in @(Get-ChildItem $base -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 500)) {
+                    if ($f.Attributes -band 0x400000 -or $f.Attributes -band 0x1000) { $cloudOnly = $true; break }
+                }
+            } catch {}
+            $detail = "Module files live under an OneDrive-synced folder: $base"
+            if ($cloudOnly) { $detail += ' - cloud-only files present (recall-on-data-access attribute)' }
+            $detail += ". Mark the folder 'Always keep on this device' or reinstall with Install-Module $($m.Name) -Scope AllUsers"
+            Add-Check 'Modules' $m.Name 'WARN' $detail
+        }
+    }
 }
 
 # ------------------------------------------------------------ what this window has already loaded

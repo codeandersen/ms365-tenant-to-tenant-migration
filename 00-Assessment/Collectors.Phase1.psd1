@@ -230,7 +230,7 @@
            AdminRoles=@('Teams Administrator'); AppOnlySupported=$true; RequiredLicence=''; Coverage='Partial';
            DocsUrl='https://learn.microsoft.com/en-us/powershell/module/teams/get-csteamsclientconfiguration'; ValidationStatus='NotValidatedLive'; KnownLimitations='' }
         @{ Name='TeamsPolicies'; Section='TeamsConfig'; ServiceGroup='Teams'; Level='Basic'; Workstream='Collaboration'; Workload='Microsoft Teams';
-           Output='TeamsPolicies.csv'; Cmdlet='Get-CsTeamsMeetingPolicy/MessagingPolicy/AppSetupPolicy/AppPermissionPolicy/CallingPolicy/UpdatePolicy'; ApiVersion='PowerShell';
+           Output='TeamsPolicies.csv'; Cmdlet='Get-CsTeamsMeetingPolicy/MessagingPolicy/AppSetupPolicy/AppPermissionPolicy/CallingPolicy/UpdateManagementPolicy'; ApiVersion='PowerShell';
            DelegatedPermissions=@(); ApplicationPermissions=@();
            AdminRoles=@('Teams Administrator'); AppOnlySupported=$true; RequiredLicence=''; Coverage='Partial';
            DocsUrl='https://learn.microsoft.com/en-us/powershell/module/teams/get-csteamsmeetingpolicy'; ValidationStatus='NotValidatedLive'; KnownLimitations='Names only - no per-policy user counts' }
