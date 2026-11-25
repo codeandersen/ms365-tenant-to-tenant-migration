@@ -25,7 +25,21 @@ Output: `Inventory_<TenantName>_<Role>_<timestamp>\` with `attachments\*.csv`,
 
 Useful switches: `-Sections`/`-SkipSections`, `-SpoAdminUrl`, `-DisableWAM`
 (broker sign-in issues), `-UseDeviceCode`, `-NewWindow`, `-OutputFolder`
-(resume an aborted run).
+(resume an aborted run), `-Level Basic|Advanced|Deep` (default `Advanced`;
+`Basic` skips the per-object loops such as per-app sign-in queries, per-SP
+appRoleAssignments, per-mailbox permission/SendAs/aux-archive queries, per-team
+installed apps and per-group Planner plans), and `-ClientId` +
+`-CertificateThumbprint` for certificate app-only runs — see
+[docs/App-Only-Setup.md](../docs/App-Only-Setup.md). Delegated-only collectors
+report `NotSupported` in app-only mode; SPO admin falls back to Graph.
+
+Each collector records status in `Collectors.csv` (merged into
+`summary.json.collectors`): Success / PartialSuccess / NotInUse / Skipped /
+NotLicensed / AccessDenied / AuthenticationFailed / DiscoveryFailed /
+NotSupported / ManualDiscoveryRequired, with object count, duration and the
+first warnings. The full registry lives in `Collectors.psd1` and is rendered as
+[docs/Collector-Matrix.md](../docs/Collector-Matrix.md) (regenerate with
+`tools\New-CollectorMatrix.ps1`).
 
 ## New-InventoryReport.ps1
 

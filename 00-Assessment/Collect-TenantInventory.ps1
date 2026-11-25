@@ -103,7 +103,7 @@
             Microsoft.Online.SharePoint.PowerShell, MicrosoftTeams
 #>
 #requires -Version 7.2
-[CmdletBinding()]
+[CmdletBinding(DefaultParameterSetName = 'Delegated')]
 param(
     [Parameter(Mandatory)]
     [ValidateSet('Source','Target')]
@@ -152,7 +152,23 @@ param(
     [ValidateRange(1,8)]
     [int]$SignInQueryThrottle = 4,
 
-    [switch]$IncludeMicrosoftAppsInSignInLogs
+    [switch]$IncludeMicrosoftAppsInSignInLogs,
+
+    # Collection depth: Basic skips per-object loops, Advanced is today's output,
+    # Deep adds the heaviest collectors (none yet - reserved).
+    [ValidateSet('Basic','Advanced','Deep')]
+    [string]$Level = 'Advanced',
+
+    # Certificate app-only auth (opt-in). Both must be given together; the
+    # certificate must exist in Cert:\CurrentUser\My or Cert:\LocalMachine\My
+    # with a private key. See docs/App-Only-Setup.md.
+    [Parameter(ParameterSetName = 'AppOnly', Mandatory)]
+    [ValidatePattern('^[0-9a-fA-F-]{36}$')]
+    [string]$ClientId,
+
+    [Parameter(ParameterSetName = 'AppOnly', Mandatory)]
+    [ValidatePattern('^[0-9a-fA-F]{40}$')]
+    [string]$CertificateThumbprint
 )
 
 Set-StrictMode -Version 1
@@ -240,13 +256,143 @@ $script:Summary = [ordered]@{
     metrics         = [ordered]@{}
     failedSections  = [ordered]@{}
     skippedSections = [ordered]@{}
+    collectors      = @()
 }
 $script:ConcealedReports = $false
+$script:AppOnly = [bool]$ClientId
+
+# Certificate app-only: the cert must exist with a private key before any connect.
+if ($script:AppOnly) {
+    $script:ClientCertificate = @('Cert:\CurrentUser\My', 'Cert:\LocalMachine\My' | ForEach-Object {
+        Get-Item (Join-Path $_ $CertificateThumbprint) -ErrorAction SilentlyContinue
+    } | Where-Object { $_.HasPrivateKey } | Select-Object -First 1)
+    if (-not $script:ClientCertificate) {
+        throw "Certificate with thumbprint $CertificateThumbprint was not found or has no private key in Cert:\CurrentUser\My or Cert:\LocalMachine\My"
+    }
+}
+
+# ---- Collector registry + status tracking (Phase 0) ---------------------------
+
+$script:CollectorRegistry  = @{}
+$script:CollectorRegistryAll = @()
+$regFile = Join-Path $PSScriptRoot 'Collectors.psd1'
+if (Test-Path $regFile) {
+    try {
+        $script:CollectorRegistryAll = @((Import-PowerShellDataFile $regFile).Collectors)
+        foreach ($c in $script:CollectorRegistryAll) { $script:CollectorRegistry[$c.Name] = $c }
+    } catch { Write-Warning "Collectors.psd1 could not be loaded: $($_.Exception.Message)" }
+}
+$script:CollectorRecords  = [System.Collections.Generic.List[object]]::new()
+$script:CollectorWarnings = [System.Collections.Generic.List[string]]::new()
+$script:CollectorRows     = 0
+
+function Get-CollectorRegistryEntry {
+    param([string]$Name)
+    if ($script:CollectorRegistry.ContainsKey($Name)) { return $script:CollectorRegistry[$Name] }
+    # Section-level calls: use the first registry entry of that section
+    return @($script:CollectorRegistryAll | Where-Object { $_.Section -eq $Name -or ($_.Section -split ',') -contains $Name } | Select-Object -First 1)[0]
+}
+
+function Test-CollectorLevel {
+    param([string]$Name)
+    $rank = @{ Basic = 0; Advanced = 1; Deep = 2 }
+    $reg = Get-CollectorRegistryEntry -Name $Name
+    if (-not $reg -or -not $reg.Level) { return $true }
+    return $rank[$reg.Level] -le $rank[$Level]
+}
+
+function Invoke-Collector {
+    # Status wrapper around a collection block: measures duration, counts rows
+    # written via Export-CsvSafe, classifies the outcome and records it in
+    # $script:CollectorRecords (Collectors.<Group>.csv / summary.json.collectors).
+    # On error it records and RETHROWS so the existing section try/catch still
+    # sets failedSections - behaviour is unchanged.
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][scriptblock]$ScriptBlock
+    )
+    $reg = Get-CollectorRegistryEntry -Name $Name
+    $rec = [ordered]@{
+        TenantId         = $script:TenantGuid
+        TenantName       = $TenantName
+        CollectedAt      = (Get-Date).ToString('o')
+        Collector        = $Name
+        CollectorVersion = $script:ToolVersion
+        Endpoint         = if ($reg -and $reg.Endpoint) { "$($reg.Endpoint)" } else { '' }
+        Cmdlet           = if ($reg -and $reg.Cmdlet)   { "$($reg.Cmdlet)" }   else { '' }
+        ApiVersion       = if ($reg) { "$($reg.ApiVersion)" } else { '' }
+        ObjectCount      = 0
+        DurationSeconds  = 0
+        Status           = 'Unknown'
+        Completeness     = 'Unknown'
+        Errors           = ''
+        Warnings         = ''
+        KnownLimitations = if ($reg) { "$($reg.KnownLimitations)" } else { '' }
+    }
+    if ($reg -and "$($reg.Coverage)" -eq 'ManualDiscoveryRequired') {
+        $rec.Status = 'ManualDiscoveryRequired'
+        $script:CollectorRecords.Add([pscustomobject]$rec)
+        return
+    }
+    if ($script:AppOnly -and $reg -and -not $reg.AppOnlySupported) {
+        $rec.Status = 'NotSupported'
+        $rec.Errors = 'Collector requires delegated authentication (AppOnlySupported=false in Collectors.psd1)'
+        $script:CollectorRecords.Add([pscustomobject]$rec)
+        return
+    }
+    if (-not (Test-CollectorLevel -Name $Name)) {
+        $rec.Status = 'Skipped'
+        $rec.Errors = "Below -Level $Level (collector level $($reg.Level))"
+        $script:CollectorRecords.Add([pscustomobject]$rec)
+        Write-Log "Collector '$Name' skipped: requires -Level $($reg.Level) or higher."
+        return
+    }
+    $warnStart  = $script:CollectorWarnings.Count
+    $skipBefore = @($script:Summary.skippedSections.Keys)
+    $rowsBefore = $script:CollectorRows
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    try {
+        & $ScriptBlock
+    } catch {
+        $sw.Stop()
+        $rec.DurationSeconds = [math]::Round($sw.Elapsed.TotalSeconds, 1)
+        $msg = $_.Exception.Message
+        $rec.Errors = $msg
+        if (Test-GraphForbidden $_)                                     { $rec.Status = 'AccessDenied' }
+        elseif ($msg -match 'Authentication needed|AADSTS|token|auth')  { $rec.Status = 'AuthenticationFailed' }
+        else                                                            { $rec.Status = 'DiscoveryFailed' }
+        $rec.Completeness = 'Unknown'
+        $rec.Warnings = (@($script:CollectorWarnings | Select-Object -Skip $warnStart | Select-Object -First 3)) -join ' | '
+        $script:CollectorRecords.Add([pscustomobject]$rec)
+        throw
+    }
+    $sw.Stop()
+    $rec.DurationSeconds = [math]::Round($sw.Elapsed.TotalSeconds, 1)
+    $newSkips  = @($script:Summary.skippedSections.Keys | Where-Object { $skipBefore -notcontains $_ })
+    $newWarns  = @($script:CollectorWarnings | Select-Object -Skip $warnStart | Where-Object { "$_".StartsWith('[WARN]') })
+    $rec.Warnings    = (@($newWarns | Select-Object -First 3)) -join ' | '
+    $rec.ObjectCount = $script:CollectorRows - $rowsBefore
+    if (@($newSkips | Where-Object { "$($script:Summary.skippedSections[$_])" -match 'no license' }).Count -gt 0) {
+        $rec.Status = 'NotLicensed'
+    } elseif ($newSkips.Count -gt 0) {
+        $rec.Status = 'Skipped'
+        if (-not $rec.Warnings) { $rec.Warnings = (@($newSkips | ForEach-Object { "${_}: $($script:Summary.skippedSections[$_])" }) | Select-Object -First 3) -join ' | ' }
+    } elseif ($newWarns.Count -gt 0) {
+        $rec.Status = 'PartialSuccess'
+    } elseif ($rec.ObjectCount -eq 0) {
+        $rec.Status = 'NotInUse'
+    } else {
+        $rec.Status = 'Success'
+    }
+    $rec.Completeness = switch ($rec.Status) { 'Success' { 'Complete' } 'PartialSuccess' { 'Partial' } 'NotInUse' { 'Complete' } default { 'Unknown' } }
+    $script:CollectorRecords.Add([pscustomobject]$rec)
+}
 
 function Write-Log {
     param([string]$Message, [ValidateSet('INFO','WARN','ERROR')][string]$Level = 'INFO')
     $line = "{0} [{1}] {2}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Level, $Message
     $line | Out-File -FilePath $logPath -Append -Encoding utf8BOM
+    if ($Level -ne 'INFO') { $script:CollectorWarnings.Add("[$Level] $Message") }
     switch ($Level) {
         'WARN'  { Write-Warning $Message }
         'ERROR' { Write-Host $line -ForegroundColor Red }
@@ -262,6 +408,7 @@ function Export-CsvSafe {
         return
     }
     $Data | Export-Csv -Path $path -NoTypeInformation -Encoding utf8BOM
+    $script:CollectorRows += $Data.Count
     Write-Log "Wrote $($Data.Count) rows to attachments\$Name"
 }
 
@@ -989,6 +1136,7 @@ function Invoke-Groups {
 
     # Planner plans per Microsoft 365 group (Tasks.Read delegated)
     # https://learn.microsoft.com/en-us/graph/api/plannergroup-list-plans
+    Invoke-Collector -Name 'PlannerPlans' -ScriptBlock {
     $m365Groups = @($rows | Where-Object { $_.GroupType -eq 'Microsoft365' })
     $planRows = [System.Collections.Generic.List[object]]::new()
     $gi = 0
@@ -1016,6 +1164,7 @@ function Invoke-Groups {
     }
     if ($planRows.Count -gt 0) { Export-CsvSafe -Data $planRows.ToArray() -Name 'PlannerPlans.csv' }
     $script:Summary.metrics.plannerPlanCount = $planRows.Count
+    }
 }
 
 function Invoke-Roles {
@@ -1322,6 +1471,10 @@ function Invoke-Apps {
     # --- Granted permissions per enterprise app (AppPermissions.csv) ---------
     # Learn: https://learn.microsoft.com/en-us/graph/api/serviceprincipal-list-approleassignments
     #        https://learn.microsoft.com/en-us/graph/api/oauth2permissiongrant-list
+    $permRows = @()
+    $script:AppPermRows = @()
+    $script:AppPermResourceMap = $null
+    Invoke-Collector -Name 'AppPermissions' -ScriptBlock {
     Write-Log 'Apps: collecting granted permissions per enterprise app...'
     $grants = @()
     try {
@@ -1359,10 +1512,14 @@ function Invoke-Apps {
             $resourceMap[$rid] = @{ DisplayName = ''; AppId = ''; Roles = @{}; Scopes = @{} }
         }
     }
-    $permRows = @(ConvertTo-AppPermissionRows -ClientServicePrincipals ($nonMsSps | ForEach-Object {
+    $script:AppPermRows = @(ConvertTo-AppPermissionRows -ClientServicePrincipals ($nonMsSps | ForEach-Object {
             [pscustomobject]@{ id = "$($_.id)"; appId = "$($_.appId)"; displayName = "$($_.displayName)" } }) `
         -RoleAssignmentsByClientId $assignMap -PermissionGrants $grants -ResourceServicePrincipals $resourceMap)
-    Export-CsvSafe -Data $permRows -Name 'AppPermissions.csv'
+    Export-CsvSafe -Data $script:AppPermRows -Name 'AppPermissions.csv'
+    $script:AppPermResourceMap = $resourceMap
+    }
+    $permRows = @($script:AppPermRows)
+    $resourceMap = if ($script:AppPermResourceMap) { $script:AppPermResourceMap } else { @{} }
     $appPermBySp = @{}; $delPermBySp = @{}; $highPermBySp = @{}
     foreach ($r in $permRows) {
         $sid = $r.ClientServicePrincipalId
@@ -1486,6 +1643,10 @@ function Invoke-AppSignIns {
     $logsUnavailable = $false
     $lastByType = @{}
     $queriedApps = [System.Collections.Generic.HashSet[string]]::new()
+    $script:AppSignInLogsRan = $false
+    $script:AppSignInLogsUnavailable = $false   # mirror: block-local $logsUnavailable can't escape the wrapper
+    Invoke-Collector -Name 'AppSignInLogs' -ScriptBlock {
+    $script:AppSignInLogsRan = $true
     $plan = Get-AppSignInQueryPlan -ServicePrincipals $spList -IncludeMicrosoftApps:$IncludeMicrosoftAppsInSignInLogs
     $byApp = @($plan | Group-Object AppId)
     $msReportOnly = if ($IncludeMicrosoftAppsInSignInLogs) { 0 } else { @($spList | Where-Object IsMicrosoftFirstParty).Count }
@@ -1587,7 +1748,7 @@ function Invoke-AppSignIns {
                 $r = $_
                 $i++
                 if ($r.AuthBroken) { $authBrokenCount++ }
-                if ($r.Forbidden) { $logsUnavailable = $true }
+                if ($r.Forbidden) { $logsUnavailable = $true; $script:AppSignInLogsUnavailable = $true }
                 if ($r.LastByType.Count -gt 0) { $lastByType[$r.AppId] = $r.LastByType }
                 [void]$queriedApps.Add($r.AppId)
                 & $emitResult $i $r.AppId $r.Types $r.LastByType $r.Queries $r.Seconds
@@ -1624,6 +1785,7 @@ function Invoke-AppSignIns {
                     if (Test-GraphForbidden $_) {
                         Write-Log "Sign-in logs not accessible (403/no licence - Entra ID P1 required) on $ctx. Remaining queries skipped." -Level WARN
                         $logsUnavailable = $true
+                        $script:AppSignInLogsUnavailable = $true
                         break apps
                     }
                     Write-Log "Sign-in query failed for ${ctx}: $($_.Exception.Message)" -Level WARN
@@ -1637,6 +1799,13 @@ function Invoke-AppSignIns {
         Write-Progress -Activity 'AppSignIns' -Completed
     }
     $script:Summary.metrics.signInLogsUnavailable = $logsUnavailable
+    }
+    if ($script:AppSignInLogsUnavailable) { $logsUnavailable = $true }
+    if (-not $script:AppSignInLogsRan) {
+        # Level-skipped (Basic): mark logs unavailable so statuses report Unknown, not stale-report verdicts
+        $logsUnavailable = $true
+        $script:Summary.metrics.signInLogsUnavailable = $true
+    }
 
     # 4. Write AppSignInActivity.csv (no user names stored)
     Write-Log 'AppSignIns 4/4: writing AppSignInActivity.csv'
@@ -1732,6 +1901,9 @@ function Invoke-Exchange {
     $stats = @{}
     $statRows = [System.Collections.Generic.List[object]]::new()
     $auxWarnLogged = $false
+    # Basic level skips the per-mailbox Get-MailboxLocation loop
+    $auxLevelOk = Test-CollectorLevel -Name 'AuxArchiveCount'
+    if (-not $auxLevelOk) { Invoke-Collector -Name 'AuxArchiveCount' -ScriptBlock {} }  # records 'Skipped'
     $i = 0
     foreach ($m in $mailboxes) {
         $i++
@@ -1757,7 +1929,7 @@ function Invoke-Exchange {
                     $row.ArchiveItemCount = $a.ItemCount
                 } catch {}
             }
-            if ($m.ArchiveStatus -eq 'Active' -or $m.AutoExpandingArchiveEnabled) {
+            if ($auxLevelOk -and ($m.ArchiveStatus -eq 'Active' -or $m.AutoExpandingArchiveEnabled)) {
                 try {
                     # -MailboxLocationType AuxArchive fails ("type supports multiple mailbox
                     # locations"); -User returns all locations, count the AuxArchive ones.
@@ -1827,6 +1999,7 @@ function Invoke-Exchange {
     if ($holdRows.Count -gt 0) { Export-CsvSafe -Data $holdRows -Name 'MailboxHolds.csv' }
 
     # Permissions on shared/resource mailboxes
+    Invoke-Collector -Name 'MailboxPermissions' -ScriptBlock {
     $shared = @($mailboxes | Where-Object { "$($_.RecipientTypeDetails)" -in 'SharedMailbox','RoomMailbox','EquipmentMailbox' })
     $permRows = [System.Collections.Generic.List[object]]::new()
     foreach ($m in $shared) {
@@ -1843,7 +2016,9 @@ function Invoke-Exchange {
         } catch {}
     }
     if ($permRows.Count -gt 0) { Export-CsvSafe -Data $permRows.ToArray() -Name 'MailboxPermissions.csv' }
+    }
 
+    Invoke-Collector -Name 'SendAsPermissions' -ScriptBlock {
     try {
         $sendAs = foreach ($m in $mailboxes) {
             Get-EXORecipientPermission -Identity $m.ExchangeGuid.Guid -ErrorAction SilentlyContinue |
@@ -1852,8 +2027,9 @@ function Invoke-Exchange {
         }
         if ($sendAs) { Export-CsvSafe -Data @($sendAs) -Name 'SendAsPermissions.csv' }
     } catch {}
+    }
 
-    # Distributionsgrupper
+    # Distribution groups
     $dgRows = foreach ($dg in (Get-DistributionGroup -ResultSize Unlimited)) {
         $mc = $null
         try { $mc = @(Get-DistributionGroupMember -Identity $dg.Identity -ResultSize Unlimited).Count } catch {}
@@ -1966,6 +2142,7 @@ function Invoke-Exchange {
 
     # Organization-wide Outlook/Office add-ins (admin-deployed)
     # https://learn.microsoft.com/en-us/powershell/module/exchange/get-app
+    Invoke-Collector -Name 'OutlookAddins' -ScriptBlock {
     try {
         $oapps = @(Get-App -OrganizationApp -ErrorAction Stop)
         $oaRows = foreach ($a in $oapps) {
@@ -1983,6 +2160,7 @@ function Invoke-Exchange {
         $script:Summary.metrics.outlookAddinCount = $oaRows.Count
     } catch {
         Write-Log "Get-App -OrganizationApp failed: $($_.Exception.Message)" -Level WARN
+    }
     }
 }
 
@@ -2191,6 +2369,7 @@ function Invoke-SharePoint {
 
     # Tenant app catalog apps (installed apps incl. SharePoint add-ins/SPFx)
     # https://learn.microsoft.com/en-us/powershell/module/microsoft.online.sharepoint.powershell/get-spoappinfo
+    Invoke-Collector -Name 'SharePointAppCatalog' -ScriptBlock {
     try {
         $appInfo = @(Get-SPOAppInfo -Name ' ' -ErrorAction Stop)
         $acRows = foreach ($ai in $appInfo) {
@@ -2204,6 +2383,7 @@ function Invoke-SharePoint {
         $script:Summary.metrics.sharePointAppCatalogCount = $acRows.Count
     } catch {
         Write-Log "Get-SPOAppInfo failed: $($_.Exception.Message)" -Level WARN
+    }
     }
 }
 
@@ -2263,6 +2443,7 @@ function Invoke-Teams {
     # Org-uploaded Teams apps in the tenant app catalog
     # https://learn.microsoft.com/en-us/graph/api/appcatalogs-list-teamsapps
     $catalogAppIds = @{}
+    Invoke-Collector -Name 'TeamsCustomApps' -ScriptBlock {
     try {
         $cat = @(Get-GraphAll -Uri "https://graph.microsoft.com/v1.0/appCatalogs/teamsApps?`$filter=distributionMethod eq 'organization'&`$select=id,externalId,displayName,distributionMethod")
         $catRows = foreach ($a in $cat) {
@@ -2280,10 +2461,12 @@ function Invoke-Teams {
         Write-Log "Teams app catalog failed: $($_.Exception.Message)" -Level WARN
         $script:Summary.skippedSections['TeamsApps'] = "Teams app catalog not collected: $($_.Exception.Message)"
     }
+    }
 
     # Apps installed per team (all added apps incl. third-party store apps;
     # IsOrgCatalogApp marks the ones uploaded to the tenant catalog)
     # https://learn.microsoft.com/en-us/graph/api/team-list-installedapps
+    Invoke-Collector -Name 'TeamsInstalledApps' -ScriptBlock {
     $instRows = [System.Collections.Generic.List[object]]::new()
     :team foreach ($t in $teamGroups) {
         try {
@@ -2311,6 +2494,7 @@ function Invoke-Teams {
     }
     if ($instRows.Count -gt 0) { Export-CsvSafe -Data $instRows.ToArray() -Name 'TeamsInstalledApps.csv' }
     $script:Summary.metrics.teamsInstalledAppCount = $instRows.Count
+    }
 }
 
 function Get-ObjProp {
@@ -2460,9 +2644,15 @@ function Invoke-PowerPlatform {
     # Power BI workspaces (optional module - separate prompt-less sign-in via the same identity)
     # https://learn.microsoft.com/en-us/powershell/module/microsoftpowerbimgmt.workspaces/get-powerbiworkspace
     if (Get-Module -ListAvailable MicrosoftPowerBIMgmt) {
+        Invoke-Collector -Name 'PowerBIWorkspaces' -ScriptBlock {
         try {
             Import-Module MicrosoftPowerBIMgmt -DisableNameChecking -ErrorAction Stop
-            $null = Connect-PowerBIServiceAccount -Tenant $script:TenantGuid -ErrorAction Stop
+            if ($script:AppOnly) {
+                # https://learn.microsoft.com/en-us/powershell/module/microsoftpowerbimgmt.profile/connect-powerbiserviceaccount
+                $null = Connect-PowerBIServiceAccount -ServicePrincipal -ApplicationId $ClientId -CertificateThumbprint $CertificateThumbprint -Tenant $script:TenantGuid -ErrorAction Stop
+            } else {
+                $null = Connect-PowerBIServiceAccount -Tenant $script:TenantGuid -ErrorAction Stop
+            }
             $ws = @(Get-PowerBIWorkspace -Scope Organization -ErrorAction Stop)
             $wsRows = foreach ($w in $ws) {
                 [pscustomobject]@{
@@ -2477,6 +2667,7 @@ function Invoke-PowerPlatform {
         } catch {
             Write-Log "Power BI collection failed: $($_.Exception.Message)" -Level WARN
             $script:Summary.skippedSections['PowerBI'] = "Power BI workspaces not collected: $($_.Exception.Message)"
+        }
         }
     } else {
         $script:Summary.skippedSections['PowerBI'] = 'Module MicrosoftPowerBIMgmt missing - install it to include Power BI workspaces'
@@ -2855,26 +3046,26 @@ function Invoke-CrossTenant {
 # ---------- Dispatcher ----------
 
 $sectionFunctions = @{
-    Tenant      = { Invoke-Tenant }
-    Licenses    = { Invoke-Licenses }
-    Users       = { if ($Role -eq 'Target') { Invoke-TargetUsers } else { Invoke-Users } }
-    Groups      = { Invoke-Groups }
-    Roles       = { Invoke-Roles }
-    Security    = { Invoke-Security }
-    Apps        = { Invoke-Apps }
-    AppSignIns  = { Invoke-AppSignIns }
-    Exchange    = { Invoke-Exchange }
-    Purview     = { Invoke-Purview }
-    OneDrive    = { Invoke-OneDrive }
-    SharePoint  = { Invoke-SharePoint }
-    Teams       = { Invoke-Teams }
-    TeamsPhone  = { Invoke-TeamsPhone }
-    PowerPlatform = { Invoke-PowerPlatform }
-    Devices     = { Invoke-Devices }
-    Usage       = { Invoke-Usage }
-    Dns         = { Invoke-Dns }
-    CrossTenant = { Invoke-CrossTenant }
-    TargetExchange = { Invoke-TargetExchange }
+    Tenant      = { Invoke-Collector -Name 'Tenant'      -ScriptBlock { Invoke-Tenant } }
+    Licenses    = { Invoke-Collector -Name 'Licenses'    -ScriptBlock { Invoke-Licenses } }
+    Users       = { Invoke-Collector -Name 'Users'       -ScriptBlock { if ($Role -eq 'Target') { Invoke-TargetUsers } else { Invoke-Users } } }
+    Groups      = { Invoke-Collector -Name 'Groups'      -ScriptBlock { Invoke-Groups } }
+    Roles       = { Invoke-Collector -Name 'Roles'       -ScriptBlock { Invoke-Roles } }
+    Security    = { Invoke-Collector -Name 'Security'    -ScriptBlock { Invoke-Security } }
+    Apps        = { Invoke-Collector -Name 'Apps'        -ScriptBlock { Invoke-Apps } }
+    AppSignIns  = { Invoke-Collector -Name 'AppSignIns'  -ScriptBlock { Invoke-AppSignIns } }
+    Exchange    = { Invoke-Collector -Name 'Exchange'    -ScriptBlock { Invoke-Exchange } }
+    Purview     = { Invoke-Collector -Name 'Purview'     -ScriptBlock { Invoke-Purview } }
+    OneDrive    = { Invoke-Collector -Name 'OneDrive'    -ScriptBlock { Invoke-OneDrive } }
+    SharePoint  = { Invoke-Collector -Name 'SharePoint'  -ScriptBlock { Invoke-SharePoint } }
+    Teams       = { Invoke-Collector -Name 'Teams'       -ScriptBlock { Invoke-Teams } }
+    TeamsPhone  = { Invoke-Collector -Name 'TeamsPhone'  -ScriptBlock { Invoke-TeamsPhone } }
+    PowerPlatform = { Invoke-Collector -Name 'PowerPlatform' -ScriptBlock { Invoke-PowerPlatform } }
+    Devices     = { Invoke-Collector -Name 'Devices'     -ScriptBlock { Invoke-Devices } }
+    Usage       = { Invoke-Collector -Name 'Usage'       -ScriptBlock { Invoke-Usage } }
+    Dns         = { Invoke-Collector -Name 'Dns'         -ScriptBlock { Invoke-Dns } }
+    CrossTenant = { Invoke-Collector -Name 'CrossTenant' -ScriptBlock { Invoke-CrossTenant } }
+    TargetExchange = { Invoke-Collector -Name 'TargetExchange' -ScriptBlock { Invoke-TargetExchange } }
 }
 
 # Sections distributed across service groups (process isolation due to MSAL conflicts)
@@ -2990,8 +3181,15 @@ if ($ServiceGroup) {
                         # Local client setting (not a tenant change): use browser sign-in instead of WAM
                         Set-MgGraphOption -DisableLoginByWAM $true
                     }
-                    $mgParams = @{ TenantId = $script:TenantGuid; Scopes = $scopes; ContextScope = 'Process'; NoWelcome = $true; ErrorAction = 'Stop' }
-                    if ($UseDeviceCode) { $mgParams['UseDeviceCode'] = $true }
+                    $mgParams = @{ TenantId = $script:TenantGuid; ContextScope = 'Process'; NoWelcome = $true; ErrorAction = 'Stop' }
+                    if ($script:AppOnly) {
+                        # https://learn.microsoft.com/en-us/powershell/microsoftgraph/app-only
+                        $mgParams['ClientId'] = $ClientId
+                        $mgParams['CertificateThumbprint'] = $CertificateThumbprint
+                    } else {
+                        $mgParams['Scopes'] = $scopes
+                        if ($UseDeviceCode) { $mgParams['UseDeviceCode'] = $true }
+                    }
                     try {
                         Connect-MgGraph @mgParams
                     } catch {
@@ -3020,22 +3218,29 @@ if ($ServiceGroup) {
                     $script:Summary.metrics.initialDomain     = $script:InitialDomain
                     $script:Summary.metrics.tenantIdVerified  = $true
 
-                    # --- /me: guest or member? ---
-                    try { $me = Invoke-MgGraphRequest -OutputType PSObject -Method GET -Uri 'https://graph.microsoft.com/v1.0/me?$select=userPrincipalName,userType,mail' } catch { $me = $null }
-                    $account = if ($me -and $me.userPrincipalName) { $me.userPrincipalName } else { $ctx.Account }
+                    # --- /me: guest or member? (not available in app-only mode) ---
+                    $me = $null
+                    if (-not $script:AppOnly) {
+                        try { $me = Invoke-MgGraphRequest -OutputType PSObject -Method GET -Uri 'https://graph.microsoft.com/v1.0/me?$select=userPrincipalName,userType,mail' } catch { $me = $null }
+                    }
+                    $account = if ($script:AppOnly) { "app:$ClientId" } elseif ($me -and $me.userPrincipalName) { $me.userPrincipalName } else { $ctx.Account }
                     $script:Summary.collectedBy = $account
-                    if ($me -and $me.userType -eq 'Guest') {
+                    if ($script:AppOnly) {
+                        $script:GuestMode = $false
+                    } elseif ($me -and $me.userType -eq 'Guest') {
                         $script:GuestMode = $true
                     } elseif (-not $me) {
                         $accDomain = ("$account" -split '@')[-1]
                         $script:GuestMode = -not (@($org.verifiedDomains | ForEach-Object name) -icontains $accDomain)
                     }
                     $script:Summary.metrics.signedInAccount     = $account
-                    $script:Summary.metrics.collectedByUserType = if ($script:GuestMode) { 'Guest' } else { 'Member' }
+                    $script:Summary.metrics.collectedByUserType = if ($script:AppOnly) { 'Application' } elseif ($script:GuestMode) { 'Guest' } else { 'Member' }
                     $script:Summary.metrics.guestMode           = $script:GuestMode
                     if ($script:GuestMode) {
                         Write-Log "Signed in as GUEST ($account) - SharePoint admin and Exchange PowerShell limited; Graph fallbacks are used." -Level WARN
                         Write-Host "Signed in as guest ($account) - limited data for Exchange and SharePoint (Graph fallback is used)." -ForegroundColor Yellow
+                    } elseif ($script:AppOnly) {
+                        Write-Log "Graph connected as app $ClientId to tenant $($ctx.TenantId)"
                     } else {
                         Write-Log "Graph connected as $account (member) to tenant $($ctx.TenantId)"
                     }
@@ -3071,6 +3276,12 @@ if ($ServiceGroup) {
                 }
                 try {
                     $exoParams = @{ ShowBanner = $false; ErrorAction = 'Stop' }
+                    if ($script:AppOnly) {
+                        # https://learn.microsoft.com/en-us/powershell/exchange/app-only-auth-powershell-v2
+                        $exoParams['AppId'] = $ClientId
+                        $exoParams['CertificateThumbprint'] = $CertificateThumbprint
+                        $exoParams['Organization'] = $script:InitialDomain
+                    }
                     if ($DisableWAM) { $exoParams['DisableWAM'] = $true }
                     if ($script:GuestMode -and $script:InitialDomain) {
                         $exoParams['DelegatedOrganization'] = $script:InitialDomain
@@ -3119,6 +3330,11 @@ if ($ServiceGroup) {
                 if ($toRun -contains 'Purview' -and $script:ExoConnected) {
                     try {
                         $ippsParams = @{ ShowBanner = $false; ErrorAction = 'Stop' }
+                        if ($script:AppOnly) {
+                            $ippsParams['AppId'] = $ClientId
+                            $ippsParams['CertificateThumbprint'] = $CertificateThumbprint
+                            $ippsParams['Organization'] = $script:InitialDomain
+                        }
                         if ($DisableWAM) { $ippsParams['DisableWAM'] = $true }
                         if ($script:GuestMode -and $script:InitialDomain) {
                             $ippsParams['DelegatedOrganization'] = $script:InitialDomain
@@ -3156,6 +3372,14 @@ if ($ServiceGroup) {
                 }
             }
             'SharePoint' {
+                if ($script:AppOnly) {
+                    # Connect-SPOService has no certificate app-only support
+                    # https://learn.microsoft.com/en-us/powershell/sharepoint/sharepoint-online/connect-sharepoint-online
+                    $script:Summary.skippedSections['SharePointAdmin'] = 'SPO admin PowerShell does not support certificate app-only - Graph fallback used'
+                    foreach ($s in $toRun) { $script:Summary.failedSections[$s] = 'SPO admin PowerShell does not support certificate app-only - deferred to Graph fallback' }
+                    $toRun = @()
+                    break
+                }
                 if ($script:GuestMode) {
                     # Guests do not have access to the SharePoint admin center
                     $script:Summary.skippedSections['SharePointAdmin'] = 'Guest accounts do not have access to SharePoint admin - Graph fallback is used'
@@ -3217,8 +3441,14 @@ if ($ServiceGroup) {
                 }
                 try {
                     $teamsParams = @{ TenantId = $script:TenantGuid; ErrorAction = 'Stop' }
-                    if ($DisableWAM) { $teamsParams['DisableWAM'] = $true }
-                    if ($UseDeviceCode) { $teamsParams['UseDeviceAuthentication'] = $true }
+                    if ($script:AppOnly) {
+                        # https://learn.microsoft.com/en-us/microsoftteams/teams-powershell-application-authentication
+                        $teamsParams['ApplicationId'] = $ClientId
+                        $teamsParams['CertificateThumbprint'] = $CertificateThumbprint
+                    } else {
+                        if ($DisableWAM) { $teamsParams['DisableWAM'] = $true }
+                        if ($UseDeviceCode) { $teamsParams['UseDeviceAuthentication'] = $true }
+                    }
                     $null = Connect-MicrosoftTeams @teamsParams
                     $csTenant = $null
                     try { $csTenant = (Get-CsTenant -ErrorAction Stop).TenantId } catch {}
@@ -3258,7 +3488,12 @@ if ($ServiceGroup) {
                         Import-Module Microsoft.PowerApps.Administration.PowerShell -UseWindowsPowerShell -DisableNameChecking -WarningAction SilentlyContinue -ErrorAction Stop
                     }
                     # -TenantID pins the sign-in to this tenant (the account may be a guest elsewhere)
-                    $null = Add-PowerAppsAccount -TenantID $script:TenantGuid -ErrorAction Stop
+                    if ($script:AppOnly) {
+                        # https://learn.microsoft.com/en-us/power-platform/admin/powershell-create-service-principal
+                        $null = Add-PowerAppsAccount -ApplicationId $ClientId -CertificateThumbprint $CertificateThumbprint -TenantID $script:TenantGuid -ErrorAction Stop
+                    } else {
+                        $null = Add-PowerAppsAccount -TenantID $script:TenantGuid -ErrorAction Stop
+                    }
                     # Tenant guard: the environments returned must belong to this tenant
                     $ppTenantId = $null
                     try {
@@ -3312,6 +3547,10 @@ if ($ServiceGroup) {
 
     if (-not $script:Summary.metrics.Contains('concealedReports')) {
         $script:Summary.metrics.concealedReports = $script:ConcealedReports
+    }
+    if ($script:CollectorRecords.Count -gt 0) {
+        Export-CsvSafe -Data @($script:CollectorRecords) -Name "Collectors.$ServiceGroup.csv"
+        $script:Summary.collectors = @($script:CollectorRecords)
     }
     Save-Summary -FileName "summary.$ServiceGroup.json"
     Write-Log "=== Child process '$ServiceGroup' done ==="
@@ -3372,6 +3611,8 @@ function Start-Child {
     if ($IncludeMicrosoftAppsInSignInLogs) { $argList += '-IncludeMicrosoftAppsInSignInLogs' }
     if ($SignInQueryThrottle -ne 4) { $argList += @('-SignInQueryThrottle', $SignInQueryThrottle) }
     if ($SignInLookbackDays -ne 30) { $argList += @('-SignInLookbackDays', $SignInLookbackDays) }
+    if ($Level -ne 'Advanced')  { $argList += @('-Level', $Level) }
+    if ($script:AppOnly)        { $argList += @('-ClientId', $ClientId, '-CertificateThumbprint', $CertificateThumbprint) }
     $quoted = $argList | ForEach-Object { if ("$_" -match '[\s"]') { '"' + ("$_" -replace '"','\"') + '"' } else { "$_" } }
     # -NewWindow: run the child process in its own console window (if the WAM sign-in cannot show in the current terminal).
     if (-not $NewWindow) {
@@ -3535,6 +3776,25 @@ if ($exPart -and $mergedMetrics.Contains('holdsUnknown') -and -not $mergedMetric
 foreach ($k in $mergedMetrics.Keys) { $script:Summary.metrics[$k] = $mergedMetrics[$k] }
 if (-not $script:Summary.metrics.Contains('concealedReports')) {
     $script:Summary.metrics.concealedReports = $script:ConcealedReports
+}
+
+# ---- Merge Collectors.<Group>.csv (+ this process's own records) -> Collectors.csv ----
+# A resume re-run can produce several records per collector; keep the latest by CollectedAt.
+$collectorByName = [ordered]@{}
+foreach ($cf in @(Get-ChildItem (Join-Path $outDir 'Collectors.*.csv') -ErrorAction SilentlyContinue | Where-Object { $_.Name -ne 'Collectors.csv' })) {
+    foreach ($row in @(Import-Csv -Path $cf.FullName)) {
+        $cur = $collectorByName[$row.Collector]
+        if (-not $cur -or [datetime]$row.CollectedAt -gt [datetime]$cur.CollectedAt) { $collectorByName[$row.Collector] = $row }
+    }
+}
+foreach ($row in @($script:CollectorRecords)) {
+    $cur = $collectorByName[$row.Collector]
+    if (-not $cur -or [datetime]$row.CollectedAt -gt [datetime]$cur.CollectedAt) { $collectorByName[$row.Collector] = $row }
+}
+if ($collectorByName.Count -gt 0) {
+    $mergedCollectors = @($collectorByName.Values)
+    Export-CsvSafe -Data $mergedCollectors -Name 'Collectors.csv'
+    $script:Summary.collectors = $mergedCollectors
 }
 Save-Summary -FileName 'summary.json'
 if ($abort) {

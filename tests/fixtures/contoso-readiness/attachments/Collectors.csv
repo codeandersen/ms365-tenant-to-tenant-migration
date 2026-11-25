@@ -1,0 +1,6 @@
+TenantId,TenantName,CollectedAt,Collector,CollectorVersion,Endpoint,Cmdlet,ApiVersion,ObjectCount,DurationSeconds,Status,Completeness,Errors,Warnings,KnownLimitations
+aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee,Contoso,2026-11-19T10:00:00.0000000+01:00,Organization,1.0,GET /organization,,v1.0,1,2.1,Success,Complete,,,
+aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee,Contoso,2026-11-19T10:00:02.0000000+01:00,Users,1.0,GET /users,,v1.0,5,3.4,Success,Complete,,,
+aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee,Contoso,2026-11-19T10:00:05.0000000+01:00,AutopilotDevices,1.0,GET /deviceManagement/windowsAutopilotDeviceIdentities,,v1.0,1,1.0,Success,Complete,,,
+aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee,Contoso,2026-11-19T10:00:07.0000000+01:00,Forms,1.0,,,PowerShell,0,0,ManualDiscoveryRequired,Unknown,,,No API
+aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee,Contoso,2026-11-19T10:00:08.0000000+01:00,TeamsInstalledApps,1.0,GET /teams/{id}/installedApps,,v1.0,2,1.0,PartialSuccess,Partial,,"[WARN] Installed apps for team 'Contoso Team' failed: timeout",

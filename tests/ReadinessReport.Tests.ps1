@@ -206,4 +206,29 @@ Describe 'New-MigrationReadinessReport' {
         $m | Should -Match 'Organization Outlook add-ins \(OutlookAddins\.csv\)'
         $m | Should -Match 'SharePoint tenant app catalog apps \(SharePointAppCatalog\.csv\)'
     }
+
+    It 'renders an Executive summary before section 1' {
+        $script:Md | Should -Match '## Executive summary'
+        $script:Md.IndexOf('## Executive summary') | Should -BeLessThan $script:Md.IndexOf('## 1. Summary')
+        $script:Md | Should -Match '\| Users \(total\) \|'
+        $script:Md | Should -Match 'Blockers \(section 7\)'
+        $script:Md | Should -Match 'Items needing manual assessment'
+        $script:Md | Should -Match 'Teams files are included in the SharePoint/OneDrive'
+    }
+
+    It 'renders the Workload summary from Collectors.csv' {
+        $script:Md | Should -Match '## Workload summary'
+        $script:Md | Should -Match '\| Identity \| Organization \| Yes \| Yes \| 1 \|'
+        $script:Md | Should -Match 'ManualDiscoveryRequired'
+        $script:Md | Should -Match 'PartialSuccess'
+        $script:Md | Should -Match 'Not Assessed'
+    }
+
+    It 'shows Not Assessed workload note when Collectors.csv is absent' {
+        Remove-Item (Join-Path $script:Inv 'attachments\Collectors.csv') -ErrorAction SilentlyContinue
+        & $script:Report -InventoryPath $script:Inv -OutFile (Join-Path $script:Inv 'R7.md')
+        $m = [System.IO.File]::ReadAllText((Join-Path $script:Inv 'R7.md'), [System.Text.Encoding]::UTF8)
+        $m | Should -Match '## Workload summary'
+        $m | Should -Match 'Not Assessed'
+    }
 }

@@ -18,6 +18,8 @@ BeforeAll {
 
     # Stubs must exist before Pester can mock them
     function Write-Log { param([string]$Message, [string]$Level = 'INFO') }
+    # Pass-through stub: the collector status wrapper is tested separately
+    function Invoke-Collector { param([string]$Name, [scriptblock]$ScriptBlock) & $ScriptBlock }
     function Export-CsvSafe { param([object[]]$Data, [string]$Name) }
     function Get-GraphAll { param([string]$Uri, [hashtable]$Headers, [int]$MaxRetries = 5) }
     function Invoke-MgGraphRequest { param([hashtable]$Arguments) }

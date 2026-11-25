@@ -68,6 +68,7 @@ $RepoDocs       = 'https://github.com/codeandersen/ms365-tenant-to-tenant-migrat
 
 $attach = Join-Path $InventoryPath 'attachments'
 $notInventoried = [System.Collections.Generic.List[string]]::new()
+$script:BlockerCount = 0
 
 function Test-DisabledArchive($m) {
     # Get-Mailbox returns the all-zero GUID when there is no disabled archive.
@@ -663,6 +664,7 @@ function Add-Blocker {
     param([string]$Title, [int]$Count, [string]$Why, [string]$Action, [object[]]$Examples,
           [string]$ExampleCol, [string]$DetailCol)
     if ($Count -le 0) { return }
+    $script:BlockerCount += $Count
     $null = $r.AppendLine("### $Title - $Count")
     $null = $r.AppendLine('')
     $null = $r.AppendLine("- Why: $Why")
@@ -988,6 +990,126 @@ foreach ($n in ($notInventoried | Sort-Object -Unique)) { $null = $r.AppendLine(
 $null = $r.AppendLine('')
 $null = $r.AppendLine("See [docs/What-Doesnt-Move.md]($RepoDocs/What-Doesnt-Move.md) for the full list of content that does not migrate.")
 
+# ---- Executive + workload summary (prepended before '## 1. Summary') ----------
+# Collector status comes from Collectors.csv (written by newer inventories);
+# the registry (Collectors.psd1, same folder) maps each collector to a workload.
+$collectorsCsv = Import-AttCsv 'Collectors.csv'
+$regByName = @{}
+$regPath = Join-Path $PSScriptRoot 'Collectors.psd1'
+if (Test-Path $regPath) {
+    try { foreach ($ce in @((Import-PowerShellDataFile -Path $regPath).Collectors)) { $regByName[$ce.Name] = $ce } } catch {}
+}
+
+function Get-CsvCount { param([object[]]$Rows, [string]$CsvName)
+    if (-not (Test-CsvPresent $CsvName)) { return 'Unknown' }
+    return $Rows.Count }
+
+$enabledUsers = 'Unknown'
+if ($users.Count -gt 0 -and $users[0].PSObject.Properties['AccountEnabled']) {
+    $enabledUsers = @($users | Where-Object { "$($_.AccountEnabled)" -eq 'True' }).Count
+}
+$disabledUsers = if ($enabledUsers -is [int]) { $users.Count - $enabledUsers } else { 'Unknown' }
+$licensedUsers = @($users | Where-Object { "$($_.AssignedLicenses)".Trim() }).Count
+$archiveMbx = @($mailboxes | Where-Object { "$($_.ArchiveStatus)" -eq 'Active' })
+$apRec = @($collectorsCsv | Where-Object { $_.Collector -eq 'AutopilotDevices' } | Select-Object -First 1) | Select-Object -First 1
+$autopilotCount = $autopilot.Count
+if ($apRec -and "$($apRec.Status)" -notin 'Success','NotInUse') { $autopilotCount = 'Unknown' }
+$retentionPols = Import-AttCsv 'RetentionPolicies.csv'
+$intunePols    = Import-AttCsv 'IntunePolicies.csv'
+$manualCollectors = @($collectorsCsv | Where-Object { "$($_.Status)" -eq 'ManualDiscoveryRequired' }).Count
+$manualItems = ($notInventoried | Sort-Object -Unique).Count + $manualCollectors
+
+$ex = [System.Text.StringBuilder]::new()
+$null = $ex.AppendLine('## Executive summary')
+$null = $ex.AppendLine('')
+$null = $ex.AppendLine('| Metric | Value |')
+$null = $ex.AppendLine('|---|---|')
+$exRows = @(
+    @{ M = 'Users (total)';         V = $users.Count }
+    @{ M = '- enabled';             V = $enabledUsers }
+    @{ M = '- guests';              V = $guests.Count }
+    @{ M = '- disabled';            V = $disabledUsers }
+    @{ M = '- licensed';            V = $licensedUsers }
+    @{ M = 'Groups';                V = $groups.Count }
+    @{ M = 'Enterprise apps';       V = $entApps.Count }
+    @{ M = 'App registrations';     V = $appRegs.Count }
+    @{ M = 'Mailboxes (total)';     V = $mailboxes.Count }
+    @{ M = '- user mailboxes';      V = $userMbx.Count }
+    @{ M = '- shared/resource';     V = $sharedMbx.Count }
+    @{ M = '- with archive';        V = $archiveMbx.Count }
+    @{ M = 'Exchange data (GB)';    V = [math]::Round($userGB + $sharedGB, 1) }
+    @{ M = 'SharePoint data (GB)';  V = [math]::Round($spGB, 1) }
+    @{ M = 'OneDrive data (GB)';    V = [math]::Round($odGB, 1) }
+    @{ M = 'SharePoint sites';      V = (Get-CsvCount $spSites 'SharePointSites.csv') }
+    @{ M = 'OneDrive sites';        V = (Get-CsvCount $oneDrives 'OneDrive.csv') }
+    @{ M = 'Teams';                 V = (Get-CsvCount $teams 'Teams.csv') }
+    @{ M = '- private channels';    V = [int]$privCh }
+    @{ M = '- shared channels';     V = [int]$sharedCh }
+    @{ M = 'Intune-managed devices';V = $intuneDevs.Count }
+    @{ M = 'Autopilot devices';     V = $autopilotCount }
+    @{ M = 'Intune policies';       V = (Get-CsvCount $intunePols 'IntunePolicies.csv') }
+    @{ M = 'Conditional Access policies'; V = $caPolicies.Count }
+    @{ M = 'Purview policies (retention + DLP)'; V = $retentionPols.Count + $dlp.Count }
+    @{ M = 'Power Apps';            V = $ppApps.Count }
+    @{ M = 'Power Automate flows';  V = $ppFlows.Count }
+    @{ M = 'Power BI workspaces';   V = $pbiWs.Count }
+    @{ M = 'Blockers (section 7)';  V = $script:BlockerCount }
+    @{ M = 'Items needing manual assessment'; V = $manualItems }
+)
+foreach ($row in $exRows) { $null = $ex.AppendLine("| $($row.M) | $($row.V) |") }
+$null = $ex.AppendLine('')
+$null = $ex.AppendLine('Teams files are included in the SharePoint/OneDrive figures - they are not counted separately.')
+$null = $ex.AppendLine('')
+
+$null = $ex.AppendLine('## Workload summary')
+$null = $ex.AppendLine('')
+if ($collectorsCsv.Count -eq 0) {
+    $null = $ex.AppendLine('This inventory has no Collectors.csv - collector status is **Not Assessed**. Re-run the assessment with a version that records collector status (see [Collector-Matrix.md]($RepoDocs/Collector-Matrix.md)).')
+    $null = $ex.AppendLine('')
+} else {
+    $methodMap = [ordered]@{
+        'Exchange|mailbox'      = 'Cross-tenant mailbox migration'
+        'OneDrive'              = 'Cross-tenant OneDrive migration'
+        'SharePoint'            = 'Cross-tenant SharePoint migration'
+        'Teams'                 = 'Partial - export/import + rebuild'
+        'Planner'               = 'Manual - Planner is not moved'
+        'Devices|Intune|Autopilot' = 'Wipe and re-enrol / re-register in target'
+        'Power Platform|Power BI'  = 'Export/import (manual)'
+        'Licence'               = 'Assign in target'
+        'Domain'                = 'Verify domain in target'
+        'Identity|Group|User'   = 'Recreate / sync in target'
+        'Security|Conditional'  = 'Recreate in target'
+        'Compliance|Purview|Retention|DLP' = 'Recreate in target'
+        'Mail flow|Transport'   = 'Recreate in target'
+    }
+    $null = $ex.AppendLine('| Workstream | Workload | Identified | In use | Objects | Data (GB) | Discovery status | Completeness | Suggested method | Manual assessment | Business criticality | Migration complexity |')
+    $null = $ex.AppendLine('|---|---|---|---|---|---|---|---|---|---|---|---|')
+    foreach ($rec in $collectorsCsv) {
+        $reg = $regByName["$($rec.Collector)"]
+        $ws = if ($reg) { "$($reg['Workstream'])" } else { '-' }
+        $wl = if ($reg) { "$($reg['Workload'])" } else { "$($rec.Collector)" }
+        $objCount = "$($rec.ObjectCount)"; if (-not $objCount) { $objCount = '0' }
+        $status = "$($rec.Status)"
+        $identified = if ([int]$objCount -gt 0) { 'Yes' } else { 'No' }
+        $inUse = switch ($status) { 'Success' { 'Yes' } 'PartialSuccess' { 'Yes' } 'NotInUse' { 'No' } default { 'Unknown' } }
+        $method = 'Manual assessment'
+        foreach ($k in $methodMap.Keys) { if ($wl -match $k) { $method = $methodMap[$k]; break } }
+        $manual = 'No'
+        if ($status -eq 'ManualDiscoveryRequired' -or ($reg -and "$($reg['Coverage'])" -eq 'ManualDiscoveryRequired')) { $manual = 'Yes' }
+        $compl = "$($rec.Completeness)"; if (-not $compl) { $compl = 'Unknown' }
+        $null = $ex.AppendLine("| $ws | $wl | $identified | $inUse | $objCount | - | $status | $compl | $method | $manual | Not Assessed | Not Assessed |")
+    }
+    $null = $ex.AppendLine('')
+}
+
+$reportText = $r.ToString()
+$insertAt = $reportText.IndexOf('## 1. Summary')
+if ($insertAt -ge 0) {
+    $reportText = $reportText.Insert($insertAt, $ex.ToString())
+} else {
+    $reportText += "`n" + $ex.ToString()
+}
+
 if (-not $OutFile) { $OutFile = Join-Path $InventoryPath 'Readiness.md' }
-$r.ToString() | Out-File -FilePath $OutFile -Encoding utf8BOM
+$reportText | Out-File -FilePath $OutFile -Encoding utf8BOM
 Write-Host "Readiness report written to $OutFile"
