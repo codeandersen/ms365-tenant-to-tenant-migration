@@ -281,6 +281,12 @@
            AdminRoles=@('eDiscovery Manager','Compliance Administrator'); AppOnlySupported=$false; RequiredLicence=''; Coverage='Partial';
            DocsUrl='https://learn.microsoft.com/en-us/powershell/exchange/app-only-auth-powershell-v2'; ValidationStatus='NotValidatedLive';
            KnownLimitations='eDiscovery cmdlets are not supported in app-only auth (Learn)' }
+        @{ Name='AdaptiveScopes'; Section='Purview'; ServiceGroup='Exchange'; Level='Basic'; Workstream='Compliance'; Workload='Retention';
+           Output='AdaptiveScopes.csv'; Cmdlet='Get-AdaptiveScope'; ApiVersion='PowerShell';
+           DelegatedPermissions=@('Exchange.ManageAsApp'); ApplicationPermissions=@('Exchange.ManageAsApp');
+           AdminRoles=@('Global Reader','Compliance Administrator'); AppOnlySupported=$true; RequiredLicence=''; Coverage='Partial';
+           DocsUrl='https://learn.microsoft.com/en-us/powershell/module/exchangepowershell/get-adaptivescope'; ValidationStatus='NotValidatedLive';
+           KnownLimitations='Scope membership cannot be resolved offline - flag retention policies that may hold OneDrives via adaptive scopes' }
         @{ Name='EDiscoveryCases'; Section='Purview'; ServiceGroup='Graph'; Level='Basic'; Workstream='Compliance'; Workload='eDiscovery';
            Output='EDiscoveryCases.csv'; Endpoint='GET /security/cases/eDiscoveryCases'; ApiVersion='v1.0';
            DelegatedPermissions=@('eDiscovery.Read.All'); ApplicationPermissions=@('eDiscovery.Read.All');

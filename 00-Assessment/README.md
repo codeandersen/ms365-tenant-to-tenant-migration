@@ -92,6 +92,7 @@ New/updated collections for the readiness report:
 | `BookingsMailboxes.csv` | `Get-EXOMailbox -RecipientTypeDetails SchedulingMailbox` | Bookings isn't moved by any Microsoft tool |
 | `CustomerKey.csv` | `Get-DataEncryptionPolicy` (Exchange) + `Get-SPODataEncryptionPolicy` (SPO) | Customer Key blocks OneDrive/SharePoint moves; skipped with a warning if the SPO cmdlet isn't in the installed module |
 | `SensitivityLabels.csv` | `Get-Label` — now also exports `EncryptionType`/`LabelActions` | flags user-defined-permission labels that block site moves |
+| `AdaptiveScopes.csv` | `Get-AdaptiveScope` (IPPS; `RetentionPolicies.csv` gains `AdaptiveScopeLocation`) | lets the reports flag retention policies whose OneDrive scope cannot be resolved statically — [Learn](https://learn.microsoft.com/en-us/powershell/module/exchangepowershell/get-adaptivescope) |
 | `Mailboxes.csv` | new columns `AutoExpandingArchiveEnabled`, `DisabledArchiveGuid` (falls back to `Get-Mailbox` if EXO doesn't return it), `ArchiveQuota`, `ArchiveWarningQuota`, `AuxArchiveCount` (`Get-MailboxLocation -User <ExchangeGuid>`, counted where `MailboxLocationType` = `AuxArchive`) | per-mailbox "does the archive come along" in `Readiness.md` |
 | `MailboxStatistics.csv` | new `AuxArchiveCount` column | aux archive count per archive-enabled mailbox |
 | `summary.json` | new metrics `autoExpandingArchiveCount`, `auxArchiveMailboxCount`, `disabledArchiveCount`, `orgAutoExpandingArchive` | archive overview |

@@ -55,6 +55,7 @@ Generated from `00-Assessment/Collectors.psd1` by `tools/New-CollectorMatrix.ps1
 | Compliance | DLP | DlpPolicies | Basic | Get-DlpCompliancePolicy | PowerShell | Partial | Yes | - | - | https://learn.microsoft.com/en-us/powershell/module/exchange/get-dlpcompliancepolicy | ValidatedLive |
 | Compliance | eDiscovery | ComplianceCases | Basic | Get-ComplianceCase | PowerShell | Partial | No | - | eDiscovery cmdlets are not supported in app-only auth (Learn) | https://learn.microsoft.com/en-us/powershell/exchange/app-only-auth-powershell-v2 | NotValidatedLive |
 | Compliance | eDiscovery | CaseHoldPolicies | Basic | Get-CaseHoldPolicy | PowerShell | Partial | No | - | eDiscovery cmdlets are not supported in app-only auth (Learn) | https://learn.microsoft.com/en-us/powershell/exchange/app-only-auth-powershell-v2 | NotValidatedLive |
+| Compliance | Retention | AdaptiveScopes | Basic | Get-AdaptiveScope | PowerShell | Partial | Yes | - | Scope membership cannot be resolved offline - flag retention policies that may hold OneDrives via adaptive scopes | https://learn.microsoft.com/en-us/powershell/module/exchangepowershell/get-adaptivescope | NotValidatedLive |
 | Compliance | eDiscovery | EDiscoveryCases | Basic | GET /security/cases/eDiscoveryCases | v1.0 | Partial | Yes | - | Graph fallback when IPPS is not connected | https://learn.microsoft.com/en-us/graph/api/security-ediscoverycase-list | NotValidatedLive |
 | Compliance | eDiscovery | EDiscoveryHolds | Basic | GET /security/cases/eDiscoveryCases/{id}/custodians | v1.0 | Partial | Yes | - | - | https://learn.microsoft.com/en-us/graph/api/security-ediscoverycustodian-list | NotValidatedLive |
 | Collaboration | OneDrive | OneDrive | Basic | Get-SPOSite -IncludePersonalSite / Graph fallback | PowerShell | Partial | Yes | - | SPO admin has no certificate app-only auth - in app-only mode the Graph fallback runs (usage-report based) | https://learn.microsoft.com/en-us/powershell/sharepoint/sharepoint-online/connect-sharepoint-online | ValidatedLive |
@@ -206,6 +207,7 @@ Delegated permissions are consented interactively (`Connect-MgGraph -Scopes`). A
 | DlpPolicies | Exchange.ManageAsApp | Exchange.ManageAsApp | Global Reader<br>Compliance Administrator |
 | ComplianceCases | Exchange.ManageAsApp | Exchange.ManageAsApp | eDiscovery Manager<br>Compliance Administrator |
 | CaseHoldPolicies | Exchange.ManageAsApp | Exchange.ManageAsApp | eDiscovery Manager<br>Compliance Administrator |
+| AdaptiveScopes | Exchange.ManageAsApp | Exchange.ManageAsApp | Global Reader<br>Compliance Administrator |
 | EDiscoveryCases | eDiscovery.Read.All | eDiscovery.Read.All | eDiscovery Manager<br>Global Reader |
 | EDiscoveryHolds | eDiscovery.Read.All | eDiscovery.Read.All | eDiscovery Manager<br>Global Reader |
 | OneDrive | Sites.Read.All<br>Reports.Read.All | Sites.Read.All<br>Reports.Read.All | SharePoint Administrator<br>Global Reader |

@@ -57,6 +57,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot '..\tools\Common.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'InventoryAnalysis.psm1') -Force
 # Refuse a repo-internal output path before reading anything
 Assert-CustomerDataPath -Path $(if ($OutFile) { $OutFile } else { Join-Path $InventoryPath 'Readiness.md' })
 
@@ -188,6 +189,9 @@ $teamsInst    = Import-AttCsv 'TeamsInstalledApps.csv'
 $plannerPlans = Import-AttCsv 'PlannerPlans.csv'
 $outlookAddins= Import-AttCsv 'OutlookAddins.csv'
 $spoAppCat    = Import-AttCsv 'SharePointAppCatalog.csv'
+$retPoliciesOd= Import-AttCsv 'RetentionPolicies.csv'
+$caseHoldsOd  = Import-AttCsv 'CaseHoldPolicies.csv'
+$adaptScopes  = Import-AttCsv 'AdaptiveScopes.csv'
 
 $invSummary = $null
 $invFailed  = $null
@@ -222,6 +226,20 @@ if (($privCh + $sharedCh) -eq 0 -and $teamsChan.Count -gt 0) {
     $sharedCh = @($teamsChan | Where-Object { $_.MembershipType -eq 'shared' }).Count
 }
 $pwaSites   = @($spSites | Where-Object { $_.Template -match '^(PWA#0|PROJECTSITE)' })
+
+# OneDrives under a hold policy (retention policies + eDiscovery case holds)
+$odHold = Get-OneDriveHoldStatus -OneDrives $oneDrives -RetentionPolicies $retPoliciesOd `
+    -CaseHoldPolicies $caseHoldsOd -AdaptiveScopes $adaptScopes `
+    -RetentionCsvPresent (Test-CsvPresent 'RetentionPolicies.csv') `
+    -AdaptiveScopesCsvPresent (Test-CsvPresent 'AdaptiveScopes.csv')
+
+# Power Platform owner health + connector usage
+$ppAppOwner  = Get-PowerPlatformOwnerStatus -Items $ppApps -Users $users
+$ppFlowOwner = Get-PowerPlatformOwnerStatus -Items $ppFlows -Users $users
+$ppConnUsage = Get-ConnectorUsage -Apps $ppApps -Flows $ppFlows -CustomConnectors $ppConnectors
+$ppOrphanedFlows = @($ppFlowOwner | Where-Object { "$($_.State)" -in 'Started','Enabled' -and $_.OwnerStatus -ne 'Active' })
+$ppOrphaned      = @(@($ppAppOwner) + @($ppFlowOwner) | Where-Object { $_.OwnerStatus -in 'Disabled','NotFound','Unknown' })
+$ppOnPremConn    = @($ppConnUsage | Where-Object { $_.OnPremOrExternal })
 
 $target = $null
 if ($TargetInventoryPath) {
@@ -683,7 +701,20 @@ Add-Blocker 'Mailboxes on hold' $heldMbx.Count `
     $heldMbx 'UserPrincipalName' 'HoldReasons'
 
 if (-not (Test-CsvPresent 'Mailboxes.csv')) { $notInventoried.Add('Mailbox holds (Mailboxes.csv)') }
-$notInventoried.Add('OneDrive holds - holds block OneDrive moves too but are not collected per site; check them before the move')
+
+Add-Blocker 'OneDrives on hold' $odHold.Rows.Count `
+    "OneDrive accounts with a hold policy applied are blocked from cross-tenant migration. [Learn]($LearnOneDrive#legal-holds)" `
+    'Remove the hold policy, migrate, then reapply it on the target tenant.' `
+    $odHold.Rows 'Url' 'Reasons'
+if (-not $odHold.Evaluated) {
+    $notInventoried.Add('OneDrive holds not evaluated (RetentionPolicies.csv missing)')
+}
+$notInventoried.Add('Item-level retention labels in OneDrive (not visible at site level)')
+if ($odHold.AdaptiveScopesMissing) {
+    $notInventoried.Add('Adaptive scopes not inventoried (AdaptiveScopes.csv) - a retention policy may hold OneDrives via adaptive scope')
+} elseif ($odHold.AdaptiveTargetsOneDrive -or $odHold.AdaptiveUnknown) {
+    $notInventoried.Add('Adaptive scope membership for retention policies that target OneDrive - validate manually')
+}
 
 # Archive blockers from section 2 (aux > 12, disabled archive). Held archive
 # mailboxes are already covered by 'Mailboxes on hold' above - not double-listed.
@@ -812,6 +843,12 @@ Add-Blocker 'App credentials expiring within 60 days' $expiring60.Count `
     'Renew or rotate the credential when the app is re-created in the target.' `
     $expiring60 'OwnerName' 'EndDateTime'
 
+# Flows whose owner is disabled, deleted or unknown - connections stop at cut-over
+Add-Blocker 'Enabled flows without an active owner' $ppOrphanedFlows.Count `
+    'Flow connections are owned by users and stop working when the owner account is disabled or removed at cut-over.' `
+    'Assign a co-owner or a service account to each flow before the move; rebuild connections in the target.' `
+    $ppOrphanedFlows 'DisplayName' 'Owner'
+
 # 8. Decisions / rebuild ------------------------------------------------------------
 
 $null = $r.AppendLine('## 8. Needs a decision or rebuild (not migrated by Microsoft tools)')
@@ -855,6 +892,7 @@ $softDelD = Import-AttCsv 'SoftDeletedMailboxes.csv'
 Add-Decision 'Soft-deleted mailboxes' $softDelD.Count 'Restore or purge before cut-over - they are not migrated.'
 $gdapD = Import-AttCsv 'DelegatedAdminRelationships.csv'
 Add-Decision 'GDAP partner relationships' $gdapD.Count 'Re-establish GDAP relationships with partners in the target tenant.'
+Add-Decision 'Custom / on-prem / HTTP connectors in use' $ppOnPremConn.Count 'Connections (and any data gateway) must be rebuilt in the target tenant - see the connector usage table under Power Platform.'
 
 # Service-plan indicators
 if ($servicePlans.Count -gt 0) {
@@ -1022,6 +1060,33 @@ if ((Test-Collected 'PowerPlatformEnvironments.csv' 'powerPlatformEnvironmentCou
         $null = $r.AppendLine((Format-Table $ppEnvs @('DisplayName', 'EnvironmentType', 'Location', 'IsDefault', 'HasDataverse')))
         $null = $r.AppendLine('')
     }
+    if ($ppFlowOwner.Count -gt 0) {
+        $null = $r.AppendLine('**Flows** (top 25 - see PowerAutomateFlows.csv for all):')
+        $null = $r.AppendLine('')
+        $null = $r.AppendLine((Format-Table @($ppFlowOwner | Select-Object -First 25) @('DisplayName', 'EnvironmentName', 'State', 'Owner', 'OwnerStatus', 'TriggerType', 'ConnectorsUsed')))
+        $null = $r.AppendLine('')
+    }
+    if ($ppAppOwner.Count -gt 0) {
+        $null = $r.AppendLine('**Power Apps** (top 25 - see PowerApps.csv for all):')
+        $null = $r.AppendLine('')
+        $null = $r.AppendLine((Format-Table @($ppAppOwner | Select-Object -First 25) @('DisplayName', 'EnvironmentName', 'AppType', 'Owner', 'OwnerStatus', 'SharedWithCount', 'ConnectorsUsed')))
+        $null = $r.AppendLine('')
+    }
+    if ($ppConnUsage.Count -gt 0) {
+        $null = $r.AppendLine('**Connector usage** (OnPremOrExternal = connection/gateway must be rebuilt in the target):')
+        $null = $r.AppendLine('')
+        $null = $r.AppendLine((Format-Table $ppConnUsage @('Connector', 'Apps', 'Flows', 'OnPremOrExternal')))
+        $null = $r.AppendLine('')
+    }
+    if ($ppOrphaned.Count -gt 0) {
+        $null = $r.AppendLine("**Orphaned owners** - $($ppOrphaned.Count) app(s)/flow(s) whose owner is disabled, deleted or unknown:")
+        $null = $r.AppendLine('')
+        $orphanRows = @($ppOrphaned | Select-Object -First 25 | ForEach-Object {
+            [pscustomobject]@{ Item = "$($_.DisplayName)"; Owner = "$($_.Owner)"; OwnerStatus = $_.OwnerStatus }
+        })
+        $null = $r.AppendLine((Format-Table $orphanRows @('Item', 'Owner', 'OwnerStatus')))
+        $null = $r.AppendLine('')
+    }
 } else {
     $notInventoried.Add('Power Platform environments/apps/flows - re-run inventory with the PowerPlatform section (module Microsoft.PowerApps.Administration.PowerShell)')
 }
@@ -1143,6 +1208,7 @@ $exRows = @(
     @{ M = 'Purview policies (retention + DLP)'; V = $retentionPols.Count + $dlp.Count }
     @{ M = 'Power Apps';            V = $ppApps.Count }
     @{ M = 'Power Automate flows';  V = $ppFlows.Count }
+    @{ M = 'Orphaned apps/flows (owner disabled/unknown)'; V = $ppOrphaned.Count }
     @{ M = 'Power BI workspaces';   V = $pbiWs.Count }
     @{ M = 'Inactive mailboxes (not moved by cross-tenant tools)'; V = $inactiveMbx.Count }
     @{ M = 'Soft-deleted mailboxes'; V = $softDelMbx.Count }

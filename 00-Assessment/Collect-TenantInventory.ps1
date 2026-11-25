@@ -3389,8 +3389,19 @@ function Invoke-Purview {
     }
     $policies = @(Get-RetentionCompliancePolicy -DistributionDetail -ErrorAction SilentlyContinue |
         Select-Object Name, Enabled, Mode, ExchangeLocation, SharePointLocation, OneDriveLocation,
-                      TeamsChannelLocation, TeamsChatLocation, ModernGroupLocation)
+                      TeamsChannelLocation, TeamsChatLocation, ModernGroupLocation, AdaptiveScopeLocation)
     if ($policies) { Export-CsvSafe -Data $policies -Name 'RetentionPolicies.csv' }
+
+    # Adaptive scopes - needed to flag retention policies whose OneDrive scope
+    # cannot be resolved to static locations (see Get-OneDriveHoldStatus).
+    Invoke-Collector -Name 'AdaptiveScopes' -ScriptBlock {
+        if (Test-ExoCmdlet -Name 'Get-AdaptiveScope' -RoleHint 'Get-AdaptiveScope not in session - requires the Security & Compliance (IPPS) connection and a compliance role that can read adaptive scopes') {
+            $scopes = @(Get-AdaptiveScope -ErrorAction SilentlyContinue |
+                Select-Object Name, LocationType, FilterConditions, RawQuery)
+            $script:CollectorRows += $scopes.Count
+            if ($scopes) { Export-CsvSafe -Data $scopes -Name 'AdaptiveScopes.csv' }
+        }
+    }
 
     $rules = @(Get-RetentionComplianceRule -ErrorAction SilentlyContinue |
         Select-Object Name, Policy, RetentionDuration, RetentionComplianceAction, ApplyComplianceTag)

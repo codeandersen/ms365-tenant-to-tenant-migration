@@ -38,6 +38,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 [System.Threading.Thread]::CurrentThread.CurrentCulture = [System.Globalization.CultureInfo]::InvariantCulture
 Import-Module (Join-Path $PSScriptRoot '..\tools\Common.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'InventoryAnalysis.psm1') -Force
 # Review.md is written next to summary.json - refuse before reading anything
 Assert-CustomerDataPath -Path (Join-Path $InventoryPath 'Review.md')
 
@@ -127,7 +128,8 @@ function Format-MdTable {
     $shown = @($Rows | Select-Object -First $MaxRows)
     foreach ($r in $shown) {
         $cells = foreach ($c in $Columns) {
-            $v = "$($r.PSObject.Properties[$c].Value)"
+            $prop = $r.PSObject.Properties[$c]
+            $v = if ($prop) { "$($prop.Value)" } else { '' }
             if ($v.Length -gt 80) { $v = $v.Substring(0,77) + '...' }
             ($v -replace '\|','\|')
         }
@@ -851,6 +853,232 @@ if ($usageFiles -or $concealed) {
     Add-CheckFailed -Number 20 -Title 'Usage data' -Section 'Usage' `
         -Why 'Usage reports show actual activity per user.' `
         -Commands 'GET /reports/get*UserDetail (Microsoft Graph)'
+}
+
+# ============================================================
+# 21. OneDrive holds
+# ============================================================
+$odHoldUsers = $od
+$retCsv = Import-AttCsv 'RetentionPolicies.csv'
+$odHold = Get-OneDriveHoldStatus -OneDrives $odHoldUsers `
+    -RetentionPolicies $retCsv -CaseHoldPolicies (Import-AttCsv 'CaseHoldPolicies.csv') `
+    -AdaptiveScopes (Import-AttCsv 'AdaptiveScopes.csv') `
+    -RetentionCsvPresent ($null -ne $retCsv) `
+    -AdaptiveScopesCsvPresent ($null -ne (Import-AttCsv 'AdaptiveScopes.csv'))
+if ($odHold.Evaluated) {
+    if ($odHold.Rows.Count -gt 0) {
+        $status = 'Critical'
+        $concl = "$($odHold.Rows.Count) OneDrive(s) are under a hold policy - cross-tenant OneDrive migration is blocked until the hold is removed."
+        $res = "**Held OneDrives**`n" + (Format-MdTable -Rows @($odHold.Rows | Sort-Object Url) -Columns 'Url','Owner','Reasons')
+    } else {
+        $status = 'OK'
+        $concl = 'No OneDrive is held by an enabled retention policy or eDiscovery case hold.'
+        $res = '_No held OneDrives found._'
+    }
+    if ($odHold.AdaptiveScopesMissing -or $odHold.AdaptiveTargetsOneDrive -or $odHold.AdaptiveUnknown) {
+        $res += "`n`n_Note: adaptive scope membership cannot be resolved offline - validate retention policies with adaptive scopes manually._"
+    }
+    Add-Check -Number 21 -Title 'OneDrive holds' -Status $status -Conclusion $concl `
+        -Why 'OneDrive accounts with a hold policy applied are blocked from cross-tenant migration; the hold must be removed, the account migrated, then the hold reapplied in the target.' `
+        -Commands "Get-RetentionCompliancePolicy -DistributionDetail`nGet-CaseHoldPolicy -Case <case>`nGet-AdaptiveScope" `
+        -Results $res -Attachments @('RetentionPolicies.csv','CaseHoldPolicies.csv')
+} else {
+    Add-Check -Number 21 -Title 'OneDrive holds' -Status 'Information' `
+        -Conclusion 'OneDrive holds not evaluated - RetentionPolicies.csv was not collected.' `
+        -Why 'Holds block cross-tenant OneDrive migration and must be identified early.' `
+        -Commands 'Get-RetentionCompliancePolicy -DistributionDetail' `
+        -Results '_Not inventoried - re-run with the Purview section (IPPS connection)._'
+}
+
+# ============================================================
+# 22. Power Platform
+# ============================================================
+$ppApps  = Import-AttCsv 'PowerApps.csv'
+$ppFlows = Import-AttCsv 'PowerAutomateFlows.csv'
+$ppEnvs  = Import-AttCsv 'PowerPlatformEnvironments.csv'
+$ppConn  = Import-AttCsv 'PowerPlatformConnectors.csv'
+$ppDlp   = Import-AttCsv 'PowerPlatformDlpPolicies.csv'
+if ($ppApps -or $ppFlows -or $ppEnvs) {
+    $ppUsers = Import-AttCsv 'Users.csv'
+    $ppAppOwn  = Get-PowerPlatformOwnerStatus -Items $ppApps -Users $ppUsers
+    $ppFlowOwn = Get-PowerPlatformOwnerStatus -Items $ppFlows -Users $ppUsers
+    $ppConnUse = Get-ConnectorUsage -Apps $ppApps -Flows $ppFlows -CustomConnectors $ppConn
+    $ppOrph    = @(@($ppAppOwn) + @($ppFlowOwn) | Where-Object { $_.OwnerStatus -in 'Disabled','NotFound','Unknown' })
+    $ppOnPrem  = @($ppConnUse | Where-Object { $_.OnPremOrExternal })
+    $status = 'Information'
+    $concl = "$(@($ppEnvs).Count) environment(s), $(@($ppApps).Count) app(s), $(@($ppFlows).Count) flow(s), $(@($ppConn).Count) custom connector(s). $($ppOrph.Count) item(s) have a disabled or unknown owner; $($ppOnPrem.Count) connector(s) are on-prem/external/custom."
+    $res = ''
+    if ($ppEnvs) { $res += "**Environments**`n" + (Format-MdTable -Rows $ppEnvs -Columns 'DisplayName','EnvironmentType','Location','IsDefault','HasDataverse') + "`n" }
+    if ($ppFlowOwn) { $res += "**Flows**`n" + (Format-MdTable -Rows $ppFlowOwn -Columns 'DisplayName','EnvironmentName','State','Owner','OwnerStatus','TriggerType') + "`n" }
+    if ($ppAppOwn) { $res += "**Apps**`n" + (Format-MdTable -Rows $ppAppOwn -Columns 'DisplayName','EnvironmentName','AppType','Owner','OwnerStatus','SharedWithCount') + "`n" }
+    if ($ppConnUse) { $res += "**Connector usage**`n" + (Format-MdTable -Rows $ppConnUse -Columns 'Connector','Apps','Flows','OnPremOrExternal') + "`n" }
+    if ($ppOrph) { $res += "**Orphaned owners (Disabled/NotFound/Unknown)**`n" + (Format-MdTable -Rows $ppOrph -Columns 'DisplayName','Owner','OwnerStatus') + "`n" }
+    if ($ppDlp) { $res += "**DLP policies**`n" + (Format-MdTable -Rows $ppDlp -Columns 'DisplayName','EnvironmentName','ConnectorGroups') + "`n" }
+    Add-Check -Number 22 -Title 'Power Platform' -Status $status -Conclusion $concl `
+        -Why 'Nothing in Power Platform moves between tenants - apps and flows are exported/imported and every connection is rebuilt. Flows whose owner is disabled or deleted stop working at cut-over.' `
+        -Commands 'Get-AdminPowerAppEnvironment; Get-AdminPowerApp; Get-AdminFlow; Get-AdminPowerAppConnector' `
+        -Results $res -Attachments @('PowerPlatformEnvironments.csv','PowerApps.csv','PowerAutomateFlows.csv','PowerPlatformConnectors.csv','PowerPlatformDlpPolicies.csv')
+} else {
+    Add-Check -Number 22 -Title 'Power Platform' -Status 'Information' `
+        -Conclusion 'Power Platform not inventoried - module Microsoft.PowerApps.Administration.PowerShell was not connected.' `
+        -Why 'Apps, flows and connectors must be rebuilt in the target and orphaned owners identified early.' `
+        -Commands 'Get-AdminPowerAppEnvironment; Get-AdminPowerApp; Get-AdminFlow' `
+        -Results '_Not inventoried._'
+}
+
+# ============================================================
+# 23. Power BI workspaces
+# ============================================================
+$pbiWs = Import-AttCsv 'PowerBIWorkspaces.csv'
+if ($pbiWs) {
+    Add-Check -Number 23 -Title 'Power BI workspaces' -Status 'Information' `
+        -Conclusion "$($pbiWs.Count) Power BI workspace(s) - reports and datasets must be redeployed in the target tenant." `
+        -Why 'Power BI content does not move between tenants; capacity, workspaces and gateway data sources are rebuilt in the target.' `
+        -Commands 'Get-PowerBIWorkspace -Scope Organization -All' `
+        -Results (Format-MdTable -Rows $pbiWs -Columns 'Name','Type','State') `
+        -Attachments @('PowerBIWorkspaces.csv')
+} else {
+    Add-Check -Number 23 -Title 'Power BI workspaces' -Status 'Information' `
+        -Conclusion 'Power BI workspaces not inventoried.' `
+        -Why 'Power BI content must be redeployed in the target tenant.' `
+        -Commands 'Get-PowerBIWorkspace -Scope Organization -All' -Results '_Not inventoried._'
+}
+
+# ============================================================
+# 24. App permissions
+# ============================================================
+$appPermR = Import-AttCsv 'AppPermissions.csv'
+if ($appPermR) {
+    $appWide = ($appPermR[0].PSObject.Properties.Name -contains 'ApplicationPermissions')
+    $hpRows = if ($appWide) { @($appPermR | Where-Object { "$($_.HighPrivilegeApplication)".Trim() -or "$($_.HighPrivilegeDelegated)".Trim() }) } else { @() }
+    $res = ''
+    if ($appWide) {
+        $res += "**High-privilege grants**`n" + $(if ($hpRows) { Format-MdTable -Rows $hpRows -Columns 'ClientDisplayName','Resource','HighPrivilegeApplication','HighPrivilegeDelegated' } else { "_None._`n" })
+        $dup = Import-AttCsv 'AppDelegatedUserPermissions.csv'
+        if ($dup) {
+            $perApp = @($dup | Where-Object { "$($_.UserId)" } | Group-Object ClientDisplayName | Sort-Object Count -Descending)
+            $res += "`n**User-consented delegated grants per app (top 20)**`n" + (Format-MdTable -Rows $perApp -Columns 'Name','Count')
+        }
+    } else {
+        $res += (Format-MdTable -Rows $appPermR -Columns 'ClientDisplayName','Resource','PermissionType','Permission','ConsentType')
+    }
+    Add-Check -Number 24 -Title 'App permissions' -Status $(if ($hpRows) { 'Note' } else { 'Information' }) `
+        -Conclusion "$($appPermR.Count) app/resource permission row(s); $($hpRows.Count) hold high-privilege grants - every consent must be re-created in the target tenant." `
+        -Why 'API permissions and consent do not move between tenants - they must be re-granted, and high-privilege grants deserve review before re-consent.' `
+        -Commands 'GET /servicePrincipals/{id}/appRoleAssignments`nGET /oauth2PermissionGrants' `
+        -Results $res -Attachments @('AppPermissions.csv','AppDelegatedUserPermissions.csv')
+} else {
+    Add-Check -Number 24 -Title 'App permissions' -Status 'Information' `
+        -Conclusion 'App permissions not inventoried.' `
+        -Why 'Consent must be re-created in the target tenant.' `
+        -Commands 'GET /oauth2PermissionGrants' -Results '_Not inventoried._'
+}
+
+# ============================================================
+# 25. Workload apps (Teams, Planner, Outlook, app catalog)
+# ============================================================
+$tmCustom = Import-AttCsv 'TeamsCustomApps.csv'
+$tmInst   = Import-AttCsv 'TeamsInstalledApps.csv'
+$plans    = Import-AttCsv 'PlannerPlans.csv'
+$addins   = Import-AttCsv 'OutlookAddins.csv'
+$appCat   = Import-AttCsv 'SharePointAppCatalog.csv'
+if ($tmCustom -or $tmInst -or $plans -or $addins -or $appCat) {
+    $res = ''
+    $att = @()
+    if ($tmCustom) { $res += "**Org-uploaded Teams apps ($($tmCustom.Count))**`n" + (Format-MdTable -Rows $tmCustom -Columns 'DisplayName','TeamsAppId','Version') + "`n"; $att += 'TeamsCustomApps.csv' }
+    if ($tmInst) {
+        $topApps = @($tmInst | Group-Object AppDisplayName | Sort-Object Count -Descending | Select-Object -First 20)
+        $res += "**Installed Teams apps** - $($tmInst.Count) instance(s); top apps:`n" + (Format-MdTable -Rows $topApps -Columns 'Name','Count') + "`n"; $att += 'TeamsInstalledApps.csv'
+    }
+    if ($plans) {
+        $res += "**Planner plans ($($plans.Count))**`n" + (Format-MdTable -Rows $plans -Columns 'Title','GroupId','ContainerName') + "`n"; $att += 'PlannerPlans.csv'
+        $colCsvP = Import-AttCsv 'Collectors.csv'
+        $planRec = if ($colCsvP) { @($colCsvP | Where-Object { $_.Collector -match 'Planner' }) } else { @() }
+        if ($planRec -and "$($planRec[0].Warnings)") { $res += "_Planner limitation: $($planRec[0].Warnings -replace '\|','/')_`n" }
+    }
+    if ($addins) { $res += "**Outlook add-ins ($($addins.Count))**`n" + (Format-MdTable -Rows $addins -Columns 'DisplayName','AppVersion','Enabled','ProviderName') + "`n"; $att += 'OutlookAddins.csv' }
+    if ($appCat) { $res += "**SharePoint app catalog ($($appCat.Count))**`n" + (Format-MdTable -Rows $appCat -Columns 'Name','ProductId','Source') + "`n"; $att += 'SharePointAppCatalog.csv' }
+    Add-Check -Number 25 -Title 'Workload apps' -Status 'Information' `
+        -Conclusion "$(@($tmCustom).Count) custom Teams app(s), $(@($tmInst).Count) installed app instance(s), $(@($plans).Count) Planner plan(s), $(@($addins).Count) Outlook add-in(s), $(@($appCat).Count) app-catalog app(s) - all must be redeployed or rebuilt in the target." `
+        -Why 'Teams apps, Planner plans, Outlook add-ins and SharePoint catalog packages do not move - each must be reinstalled, redeployed or rebuilt in the target tenant.' `
+        -Commands 'GET /appCatalogs/teamsApps`nGET /teams/{id}/installedApps`nGET /planner/plans`nGet-App' `
+        -Results $res -Attachments $att
+} else {
+    Add-Check -Number 25 -Title 'Workload apps' -Status 'Information' `
+        -Conclusion 'Teams apps, Planner, Outlook add-ins and app catalog not inventoried.' `
+        -Why 'Workload apps must be redeployed or rebuilt in the target tenant.' `
+        -Commands 'GET /appCatalogs/teamsApps; Get-App' -Results '_Not inventoried._'
+}
+
+# ============================================================
+# 26. Additional inventory detail (phase 1 collectors)
+# ============================================================
+    $res = ''
+    $att = @()
+    $seen = 0
+    $inactive = Import-AttCsv 'InactiveMailboxes.csv';       if ($inactive) { $res += "**Inactive mailboxes ($($inactive.Count))** - not moved by cross-tenant tools`n" + (Format-MdTable -Rows $inactive -Columns 'DisplayName','PrimarySmtpAddress','WhenSoftDeleted') + "`n"; $att += 'InactiveMailboxes.csv'; $seen += $inactive.Count }
+    $softDel  = Import-AttCsv 'SoftDeletedMailboxes.csv';    if ($softDel)  { $res += "**Soft-deleted mailboxes ($($softDel.Count))**`n" + (Format-MdTable -Rows $softDel -Columns 'DisplayName','PrimarySmtpAddress','WhenSoftDeleted') + "`n"; $att += 'SoftDeletedMailboxes.csv'; $seen += $softDel.Count }
+    $dynDl    = Import-AttCsv 'DynamicDistributionGroups.csv'; if ($dynDl)  { $res += "**Dynamic distribution groups ($($dynDl.Count))**`n" + (Format-MdTable -Rows $dynDl -Columns 'DisplayName','PrimarySmtpAddress','RecipientFilter') + "`n"; $att += 'DynamicDistributionGroups.csv'; $seen += $dynDl.Count }
+    $hubs     = Import-AttCsv 'HubSites.csv';                if ($hubs)     { $res += "**Hub sites ($($hubs.Count))**`n" + (Format-MdTable -Rows $hubs -Columns 'Title','SiteUrl') + "`n"; $att += 'HubSites.csv'; $seen += $hubs.Count }
+    $delOd    = Import-AttCsv 'DeletedOneDrives.csv';        if ($delOd)    { $res += "**Deleted OneDrives ($($delOd.Count))**`n" + (Format-MdTable -Rows $delOd -Columns 'Url','Owner','DeletionTime') + "`n"; $att += 'DeletedOneDrives.csv'; $seen += $delOd.Count }
+    $tpeRows  = Import-AttCsv 'ThirdPartyEvidence.csv';      if ($tpeRows)  { $res += "**Third-party mail gateway evidence ($($tpeRows.Count))**`n" + (Format-MdTable -Rows $tpeRows -Columns 'Vendor','Source','Evidence') + "`n"; $att += 'ThirdPartyEvidence.csv'; $seen += $tpeRows.Count }
+    $creds    = Import-AttCsv 'AppCredentials.csv'
+    $credsExp = if ($creds) { @($creds | Where-Object { "$($_.DaysToExpiry)" -match '^-?\d+$' -and [int]$_.DaysToExpiry -le 60 }) } else { @() }
+    if ($credsExp) { $res += "**App credentials expiring within 60 days ($($credsExp.Count))**`n" + (Format-MdTable -Rows $credsExp -Columns 'OwnerName','Type','EndDateTime','DaysToExpiry') + "`n"; $att += 'AppCredentials.csv'; $seen += $credsExp.Count }
+    $samlCsv  = Import-AttCsv 'SamlCertificates.csv'
+    $samlExp  = if ($samlCsv) { @($samlCsv | Where-Object { "$($_.DaysToExpiry)" -match '^-?\d+$' -and [int]$_.DaysToExpiry -le 60 }) } else { @() }
+    if ($samlExp)  { $res += "**SAML certificates expiring within 60 days ($($samlExp.Count))**`n" + (Format-MdTable -Rows $samlExp -Columns 'OwnerName','DisplayName','EndDateTime','DaysToExpiry') + "`n"; $att += 'SamlCertificates.csv'; $seen += $samlExp.Count }
+    $xtp      = Import-AttCsv 'CrossTenantPartners.csv'
+    $xtap     = Import-AttCsv 'CrossTenantAccessPolicy.csv'
+    if ($xtp -or $xtap) { $res += "**Cross-tenant access** - $(@($xtp).Count) partner configuration(s), $(@($xtap).Count) policy row(s) - must be re-established in the target.`n"; $att += @('CrossTenantPartners.csv','CrossTenantAccessPolicy.csv'); $seen += @($xtp).Count + @($xtap).Count }
+    $gdap     = Import-AttCsv 'DelegatedAdminRelationships.csv'; if ($gdap) { $res += "**GDAP relationships ($($gdap.Count))**`n" + (Format-MdTable -Rows $gdap -Columns 'DisplayName','CustomerDisplayName','Status') + "`n"; $att += 'DelegatedAdminRelationships.csv'; $seen += $gdap.Count }
+    $authStr  = Import-AttCsv 'AuthStrengths.csv';           if ($authStr)  { $res += "**Authentication strengths ($($authStr.Count))**`n" + (Format-MdTable -Rows $authStr -Columns 'DisplayName','AllowedCombinations') + "`n"; $att += 'AuthStrengths.csv'; $seen += $authStr.Count }
+    $tpol     = Import-AttCsv 'TeamsPolicies.csv'
+    $tfed     = Import-AttCsv 'TeamsFederation.csv'
+    $tguest   = Import-AttCsv 'TeamsGuestConfig.csv'
+    if ($tpol -or $tfed -or $tguest) { $res += "**Teams configuration** - $(@($tpol).Count) policy row(s), federation and guest settings collected.`n"; $att += @('TeamsPolicies.csv','TeamsFederation.csv','TeamsGuestConfig.csv'); $seen += @($tpol).Count }
+    $gdet     = Import-AttCsv 'GroupDetails.csv';            if ($gdet)     { $res += "**Group details** - membership/ownership detail for $($gdet.Count) group(s).`n"; $att += 'GroupDetails.csv'; $seen += $gdet.Count }
+    if ($seen -gt 0) {
+        Add-Check -Number 26 -Title 'Additional inventory detail' -Status 'Information' `
+            -Conclusion "$seen extra row(s) across phase-1 collectors (inactive/soft-deleted mailboxes, dynamic groups, hub sites, deleted OneDrives, third-party evidence, expiring credentials, Teams and cross-tenant configuration)." `
+            -Why 'These items do not move between tenants - each must be recreated, resolved or validated in the target.' `
+            -Commands 'See docs/Collector-Matrix.md for the per-collector commands.' `
+            -Results $res -Attachments $att
+    } else {
+        Add-Check -Number 26 -Title 'Additional inventory detail' -Status 'Information' `
+            -Conclusion 'No phase-1 detail collected (inactive mailboxes, hub sites, third-party evidence, Teams configuration, credentials expiry).' `
+            -Why 'Phase-1 collectors add depth that affects blockers and rebuild lists.' `
+            -Commands 'Re-run with -Level Advanced for the per-object detail.' -Results '_Not inventoried._'
+    }
+
+# ============================================================
+# 27. Collector status
+# ============================================================
+$colRecs = Import-AttCsv 'Collectors.csv'
+if ($colRecs) {
+    $byStatus = @($colRecs | Group-Object Status | Sort-Object { $_.Name })
+    $problem = @($colRecs | Where-Object { $_.Status -notin 'Success','NotInUse' })
+    $ok      = @($colRecs | Where-Object { $_.Status -in 'Success','NotInUse' })
+    $ordered = @($problem) + @($ok)
+    $warnCol = @()
+    foreach ($cr in $ordered) {
+        $warnCol += [pscustomobject]@{
+            Collector   = $cr.Collector; Status = $cr.Status; ObjectCount = $cr.ObjectCount
+            Errors      = "$($cr.Errors)"; Warning = ("$($cr.Warnings)" -split '\|')[0]
+        }
+    }
+    $statusLine = ($byStatus | ForEach-Object { "$($_.Name): $($_.Count)" }) -join ' - '
+    $res = "**Per status:** $statusLine`n`n" + (Format-MdTable -Rows $warnCol -Columns 'Collector','Status','ObjectCount','Errors','Warning' -MaxRows 60)
+    Add-Check -Number 27 -Title 'Collector status' -Status $(if ($problem) { 'Note' } else { 'OK' }) `
+        -Conclusion "$($colRecs.Count) collector(s) ran - $statusLine." `
+        -Why 'Collectors that did not succeed indicate gaps in the inventory - their CSVs may be missing or partial.' `
+        -Commands 'See attachments\Collectors.csv' `
+        -Results $res -Attachments @('Collectors.csv')
+} else {
+    Add-Check -Number 27 -Title 'Collector status' -Status 'Information' `
+        -Conclusion 'No Collectors.csv - this inventory predates collector status tracking.' `
+        -Why 'Collector status shows which parts of the inventory succeeded.' `
+        -Commands 'Re-run the assessment to produce Collectors.csv' -Results '_Not inventoried._'
 }
 
 # ============================================================

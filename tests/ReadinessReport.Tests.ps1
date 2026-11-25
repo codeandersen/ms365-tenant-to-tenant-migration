@@ -270,3 +270,69 @@ Describe 'New-MigrationReadinessReport' {
         $m | Should -Match 'Application: Mail\.ReadWrite'
     }
 }
+
+Describe 'New-MigrationReadinessReport - OneDrive holds and Power Platform' {
+    BeforeEach {
+        $script:Inv = Join-Path $TestDrive 'contoso-readiness'
+        Remove-Item $script:Inv -Recurse -Force -ErrorAction SilentlyContinue
+        Copy-Item $script:Fixture $script:Inv -Recurse
+        $script:Out = Join-Path $script:Inv 'R.md'
+    }
+
+    It 'blocks held OneDrives when a retention policy covers all OneDrive' {
+        'Name,Enabled,Mode,ExchangeLocation,SharePointLocation,OneDriveLocation,AdaptiveScopeLocation' | Out-File (Join-Path $script:Inv 'attachments\RetentionPolicies.csv') -Encoding utf8
+        'KeepAll,True,Enforce,,,All,' | Out-File (Join-Path $script:Inv 'attachments\RetentionPolicies.csv') -Append -Encoding utf8
+        & $script:Report -InventoryPath $script:Inv -OutFile $script:Out
+        $md = [System.IO.File]::ReadAllText($script:Out, [System.Text.Encoding]::UTF8)
+        $md | Should -Match 'OneDrives on hold - 3'
+        $md | Should -Match "Retention policy 'KeepAll' \(all OneDrive\)"
+        $md | Should -Not -Match 'OneDrive holds not evaluated'
+    }
+
+    It 'shows no OneDrive-hold blocker when no policy covers OneDrive' {
+        'Name,Enabled,Mode,ExchangeLocation,SharePointLocation,OneDriveLocation,AdaptiveScopeLocation' | Out-File (Join-Path $script:Inv 'attachments\RetentionPolicies.csv') -Encoding utf8
+        'MailOnly,True,Enforce,All,,,' | Out-File (Join-Path $script:Inv 'attachments\RetentionPolicies.csv') -Append -Encoding utf8
+        & $script:Report -InventoryPath $script:Inv -OutFile $script:Out
+        $md = [System.IO.File]::ReadAllText($script:Out, [System.Text.Encoding]::UTF8)
+        $md | Should -Not -Match 'OneDrives on hold'
+        $md | Should -Not -Match 'OneDrive holds not evaluated'
+        $md | Should -Match 'Item-level retention labels in OneDrive'
+    }
+
+    It 'notes adaptive scopes not inventoried for adaptive policies' {
+        'Name,Enabled,Mode,ExchangeLocation,SharePointLocation,OneDriveLocation,AdaptiveScopeLocation' | Out-File (Join-Path $script:Inv 'attachments\RetentionPolicies.csv') -Encoding utf8
+        'Adapt,True,Enforce,,,,My scope' | Out-File (Join-Path $script:Inv 'attachments\RetentionPolicies.csv') -Append -Encoding utf8
+        & $script:Report -InventoryPath $script:Inv -OutFile $script:Out
+        $md = [System.IO.File]::ReadAllText($script:Out, [System.Text.Encoding]::UTF8)
+        $md | Should -Match 'Adaptive scopes not inventoried'
+    }
+
+    It 'notes manual validation when an adaptive scope targets OneDrive' {
+        'Name,Enabled,Mode,ExchangeLocation,SharePointLocation,OneDriveLocation,AdaptiveScopeLocation' | Out-File (Join-Path $script:Inv 'attachments\RetentionPolicies.csv') -Encoding utf8
+        'Adapt,True,Enforce,,,,OneDrive users' | Out-File (Join-Path $script:Inv 'attachments\RetentionPolicies.csv') -Append -Encoding utf8
+        'Name,LocationType,FilterConditions,RawQuery' | Out-File (Join-Path $script:Inv 'attachments\AdaptiveScopes.csv') -Encoding utf8
+        'OneDrive users,OneDriveAccounts,,x' | Out-File (Join-Path $script:Inv 'attachments\AdaptiveScopes.csv') -Append -Encoding utf8
+        & $script:Report -InventoryPath $script:Inv -OutFile $script:Out
+        $md = [System.IO.File]::ReadAllText($script:Out, [System.Text.Encoding]::UTF8)
+        $md | Should -Match 'Adaptive scope membership for retention policies that target OneDrive - validate manually'
+        $md | Should -Not -Match 'Adaptive scopes not inventoried'
+    }
+
+    It 'blocks enabled flows whose owner is not an active member' {
+        & $script:Report -InventoryPath $script:Inv -OutFile $script:Out
+        $md = [System.IO.File]::ReadAllText($script:Out, [System.Text.Encoding]::UTF8)
+        $md | Should -Match 'Enabled flows without an active owner - 1'
+        $md | Should -Match 'Orphaned apps/flows'
+    }
+
+    It 'renders the Power Platform tables and connector usage' {
+        & $script:Report -InventoryPath $script:Inv -OutFile $script:Out
+        $md = [System.IO.File]::ReadAllText($script:Out, [System.Text.Encoding]::UTF8)
+        $md | Should -Match '\*\*Flows\*\* \(top 25'
+        $md | Should -Match '\*\*Power Apps\*\* \(top 25'
+        $md | Should -Match '\*\*Connector usage\*\*'
+        $md | Should -Match 'sharepointonline'
+        $md | Should -Match 'Orphaned owners'
+        $md | Should -Match 'OwnerStatus'
+    }
+}
