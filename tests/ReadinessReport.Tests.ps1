@@ -167,4 +167,43 @@ Describe 'New-MigrationReadinessReport' {
     It 'Sign-in section degrades without target inventory' {
         $script:Md | Should -Match 'not inventoried - run `Collect-TenantInventory'
     }
+
+    It 'renders the apps-and-platform section with high-privilege apps' {
+        $script:Md | Should -Match '## 9\. Apps and platform items to address'
+        $script:Md | Should -Match 'Enterprise app API permissions'
+        $script:Md | Should -Match 'high-privilege grants'
+        $script:Md | Should -Match 'Contoso CRM'
+        $script:Md | Should -Match 'Application: Mail\.ReadWrite'
+        $script:Md | Should -Match 'Contoso Sync Tool'
+        $script:Md | Should -Match 'could not be resolved'
+    }
+
+    It 'lists Power Platform, Teams apps, Planner, add-ins and the app catalog' {
+        $script:Md | Should -Match '### Power Platform'
+        $script:Md | Should -Match '2 environment\(s\), 2 Power App\(s\), 1 flow\(s\), 1 custom connector'
+        $script:Md | Should -Match 'Contoso Dev'
+        $script:Md | Should -Match 'Power BI: \*\*2 workspace\(s\)\*\*'
+        $script:Md | Should -Match '1 org-uploaded Teams app\(s\).*Contoso Helper Bot'
+        $script:Md | Should -Match '2 Planner plan\(s\)'
+        $script:Md | Should -Match '1 organization Outlook add-in\(s\)'
+        $script:Md | Should -Match '1 app\(s\) in the SharePoint tenant app catalog'
+    }
+
+    It 'marks app/platform CSVs not inventoried when they are absent' {
+        foreach ($f in 'AppPermissions.csv','PowerPlatformEnvironments.csv','PowerApps.csv','PowerAutomateFlows.csv',
+                      'PowerBIWorkspaces.csv','TeamsCustomApps.csv','TeamsInstalledApps.csv','PlannerPlans.csv',
+                      'OutlookAddins.csv','SharePointAppCatalog.csv') {
+            Remove-Item (Join-Path $script:Inv "attachments\$f") -ErrorAction SilentlyContinue
+        }
+        & $script:Report -InventoryPath $script:Inv -OutFile (Join-Path $script:Inv 'R6.md')
+        $m = [System.IO.File]::ReadAllText((Join-Path $script:Inv 'R6.md'), [System.Text.Encoding]::UTF8)
+        $m | Should -Match 'Granted permissions per enterprise app \(AppPermissions\.csv\)'
+        $m | Should -Match 'Power Platform environments/apps/flows'
+        $m | Should -Match 'Power BI workspaces'
+        $m | Should -Match 'Org-uploaded Teams apps \(TeamsCustomApps\.csv\)'
+        $m | Should -Match 'Installed Teams apps per team \(TeamsInstalledApps\.csv\)'
+        $m | Should -Match 'Planner plans per group \(PlannerPlans\.csv\)'
+        $m | Should -Match 'Organization Outlook add-ins \(OutlookAddins\.csv\)'
+        $m | Should -Match 'SharePoint tenant app catalog apps \(SharePointAppCatalog\.csv\)'
+    }
 }

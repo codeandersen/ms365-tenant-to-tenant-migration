@@ -31,6 +31,10 @@
 
 .PARAMETER Sections
     Optional list of sections to collect. If omitted, all sections for the selected role run.
+    Source role: Tenant, Licenses, Users, Groups, Roles, Security, Apps, AppSignIns, Exchange,
+    Purview, OneDrive, SharePoint, Teams, Devices, Usage, Dns, PowerPlatform. PowerPlatform runs
+    its own sign-in (Power Platform admin / Global admin; needs the
+    Microsoft.PowerApps.Administration.PowerShell module - skipped with a reason if missing).
 
 .PARAMETER SkipSections
     Optional list of sections to skip.
@@ -127,7 +131,7 @@ param(
     [string]$TenantId,
 
     [Parameter(DontShow)]
-    [ValidateSet('Graph','Exchange','SharePoint','Teams')]
+    [ValidateSet('Graph','Exchange','SharePoint','Teams','PowerPlatform')]
     [string]$ServiceGroup,
 
     [Parameter(DontShow)]
@@ -755,7 +759,7 @@ $script:SectionService = @{
     AppSignIns  = 'Graph'
 }
 
-$SourceSections = @('Tenant','Licenses','Users','Groups','Roles','Security','Apps','AppSignIns','Exchange','Purview','OneDrive','SharePoint','Teams','Devices','Usage','Dns')
+$SourceSections = @('Tenant','Licenses','Users','Groups','Roles','Security','Apps','AppSignIns','Exchange','Purview','OneDrive','SharePoint','Teams','Devices','Usage','Dns','PowerPlatform')
 $TargetSections = @('Tenant','Licenses','Users','Security','CrossTenant','TargetExchange')
 
 # ---------- Source sections ----------
@@ -982,6 +986,36 @@ function Invoke-Groups {
     $script:Summary.metrics.groupCount       = $rows.Count
     $script:Summary.metrics.groupsByType     = @{}
     foreach ($t in ($rows | Group-Object GroupType)) { $script:Summary.metrics.groupsByType[$t.Name] = $t.Count }
+
+    # Planner plans per Microsoft 365 group (Tasks.Read delegated)
+    # https://learn.microsoft.com/en-us/graph/api/plannergroup-list-plans
+    $m365Groups = @($rows | Where-Object { $_.GroupType -eq 'Microsoft365' })
+    $planRows = [System.Collections.Generic.List[object]]::new()
+    $gi = 0
+    :grp foreach ($g in $m365Groups) {
+        $gi++
+        if (($gi % 100) -eq 0) { Write-Log "  Planner plans: $gi/$($m365Groups.Count) groups" }
+        try {
+            foreach ($p in @(Get-GraphAll -Uri "https://graph.microsoft.com/v1.0/groups/$($g.Id)/planner/plans")) {
+                $planRows.Add([pscustomobject]@{
+                    GroupName       = $g.DisplayName
+                    GroupId         = $g.Id
+                    PlanTitle       = $p.title
+                    PlanId          = $p.id
+                    CreatedDateTime = $p.createdDateTime
+                })
+            }
+        } catch {
+            if (Test-GraphForbidden $_) {
+                $script:Summary.skippedSections['Planner'] = "Planner plans not collected (403 - Tasks.Read consent missing?): $($_.Exception.Message)"
+                Write-Log "Planner plans not accessible (403) - remaining groups skipped." -Level WARN
+                break grp
+            }
+            Write-Log "Planner plans for group '$($g.DisplayName)' failed: $($_.Exception.Message)" -Level WARN
+        }
+    }
+    if ($planRows.Count -gt 0) { Export-CsvSafe -Data $planRows.ToArray() -Name 'PlannerPlans.csv' }
+    $script:Summary.metrics.plannerPlanCount = $planRows.Count
 }
 
 function Invoke-Roles {
@@ -1008,7 +1042,7 @@ function Invoke-Roles {
 }
 
 function Invoke-Security {
-    $entraP1 = Test-LicenseGate -Capability 'entraP1' -Section 'EntraP1' -What 'Entra ID P1 (Conditional Access, sign-in aktivitet, MFA-registrering)'
+    $entraP1 = Test-LicenseGate -Capability 'entraP1' -Section 'EntraP1' -What 'Entra ID P1 (Conditional Access, sign-in activity, MFA registration)'
     # Conditional Access
     if (-not $entraP1) {
         $script:Summary.skippedSections['ConditionalAccess'] = "Not collected: no license for Entra ID P1 in the tenant (servicePlan AAD_PREMIUM not found among active licenses)"
@@ -1111,7 +1145,7 @@ function Invoke-Security {
         $script:Summary.metrics.securityDefaultsEnabled = $null
     }
 
-    # MFA-registrering
+    # MFA registration
     if (-not $entraP1) {
         $script:Summary.skippedSections['MfaRegistration'] = "Not collected: no license for Entra ID P1 in the tenant (servicePlan AAD_PREMIUM not found among active licenses)"
         return
@@ -1137,8 +1171,134 @@ function Invoke-Security {
 
 $script:MicrosoftTenantId = 'f8cdef31-a31e-4b4a-93e4-5f571e91255a'
 
+# Permissions that grant broad or complete access - flagged in AppPermissions.csv
+# so the readiness report can point them out (they must be re-consented in the target).
+$script:HighPrivilegePermissionPatterns = @(
+    '*.ReadWrite.All', 'Mail.*', 'Files.*.All', 'Sites.*.All', 'Directory.*',
+    'RoleManagement.*', 'full_access_as_app', 'Application.ReadWrite.All')
+
+function Test-HighPrivilegePermission {
+    param([string]$Permission)
+    if (-not $Permission) { return $false }
+    foreach ($pat in $script:HighPrivilegePermissionPatterns) {
+        if ($Permission -like $pat) { return $true }
+    }
+    return $false
+}
+
+function ConvertTo-AppPermissionRows {
+    # Pure: flatten granted API permissions to one row per grant.
+    # - Application grants: servicePrincipal/{id}/appRoleAssignments -> resource name
+    #   + appRole value, resolved via ResourceServicePrincipals (unresolvable
+    #   appRoleId -> Permission = the GUID, Resolved = False).
+    # - Delegated grants: oauth2PermissionGrants -> one row per scope token.
+    #   consentType AllPrincipals = 'Admin', Principal = 'User' with
+    #   ConsentedUserCount = number of distinct principalIds (never the IDs).
+    param(
+        [object[]]$ClientServicePrincipals,
+        [hashtable]$RoleAssignmentsByClientId,
+        [object[]]$PermissionGrants,
+        [hashtable]$ResourceServicePrincipals
+    )
+    $zeroId = '00000000-0000-0000-0000-000000000000'
+    $rows = [System.Collections.Generic.List[object]]::new()
+    foreach ($sp in $ClientServicePrincipals) {
+        foreach ($a in @($RoleAssignmentsByClientId["$($sp.id)"])) {
+            $res      = $ResourceServicePrincipals["$($a.resourceId)"]
+            $perm     = $null
+            $resolved = $false
+            if ("$($a.appRoleId)" -eq $zeroId) {
+                $perm = '(member)'; $resolved = $true
+            } elseif ($res -and $res.Roles.Contains("$($a.appRoleId)")) {
+                $perm = $res.Roles["$($a.appRoleId)"]; $resolved = $true
+            }
+            if (-not $perm) { $perm = "$($a.appRoleId)" }
+            $rows.Add([pscustomobject]@{
+                ClientDisplayName          = $sp.displayName
+                ClientAppId                = $sp.appId
+                ClientServicePrincipalId   = $sp.id
+                PermissionType             = 'Application'
+                Resource                   = if ($res) { $res.DisplayName } else { '' }
+                ResourceServicePrincipalId = "$($a.resourceId)"
+                Permission                 = $perm
+                ConsentType                = 'Admin'
+                ConsentedUserCount         = ''
+                IsHighPrivilege            = Test-HighPrivilegePermission -Permission $perm
+                Resolved                   = $resolved
+            })
+        }
+        $clientGrants = @($PermissionGrants | Where-Object { "$($_.clientId)" -eq "$($sp.id)" })
+        foreach ($g in $clientGrants) {
+            $res     = $ResourceServicePrincipals["$($g.resourceId)"]
+            $isAdmin = "$($g.consentType)" -eq 'AllPrincipals'
+            foreach ($sc in ("$($g.scope)" -split '\s+' | Where-Object { $_ })) {
+                $userCount = ''
+                if (-not $isAdmin) {
+                    $userCount = @($clientGrants |
+                        Where-Object { "$($_.resourceId)" -eq "$($g.resourceId)" -and ("$($_.scope)" -split '\s+') -contains $sc } |
+                        ForEach-Object { "$($_.principalId)" } | Sort-Object -Unique).Count
+                }
+                $rows.Add([pscustomobject]@{
+                    ClientDisplayName          = $sp.displayName
+                    ClientAppId                = $sp.appId
+                    ClientServicePrincipalId   = $sp.id
+                    PermissionType             = 'Delegated'
+                    Resource                   = if ($res) { $res.DisplayName } else { '' }
+                    ResourceServicePrincipalId = "$($g.resourceId)"
+                    Permission                 = $sc
+                    ConsentType                = if ($isAdmin) { 'Admin' } else { 'User' }
+                    ConsentedUserCount         = $userCount
+                    IsHighPrivilege            = Test-HighPrivilegePermission -Permission $sc
+                    Resolved                   = $true
+                })
+            }
+        }
+    }
+    return $rows
+}
+
+function ConvertTo-AppRegistrationPermissionRows {
+    # Pure: requested (not necessarily granted) permissions from app
+    # registration requiredResourceAccess. Type 'Role' = Application,
+    # 'Scope' = Delegated. Resource/permission names resolved via
+    # ResourceByAppId (appId -> @{ DisplayName; Roles=@{id=value}; Scopes=@{id=value} }).
+    param(
+        [object[]]$Applications,
+        [hashtable]$ResourceByAppId
+    )
+    $rows = [System.Collections.Generic.List[object]]::new()
+    foreach ($a in $Applications) {
+        foreach ($rra in @($a.requiredResourceAccess)) {
+            $res = $ResourceByAppId["$($rra.resourceAppId)"]
+            foreach ($ra in @($rra.resourceAccess)) {
+                $ptype    = if ("$($ra.type)" -eq 'Role') { 'Application' } elseif ("$($ra.type)" -eq 'Scope') { 'Delegated' } else { "$($ra.type)" }
+                $perm     = $null
+                $resolved = $false
+                if ($res) {
+                    if ($ptype -eq 'Application' -and $res.Roles.Contains("$($ra.id)"))  { $perm = $res.Roles["$($ra.id)"];  $resolved = $true }
+                    if ($ptype -eq 'Delegated'   -and $res.Scopes.Contains("$($ra.id)")) { $perm = $res.Scopes["$($ra.id)"]; $resolved = $true }
+                }
+                if (-not $perm) { $perm = "$($ra.id)" }
+                $rows.Add([pscustomobject]@{
+                    ApplicationDisplayName = $a.displayName
+                    ApplicationAppId       = $a.appId
+                    ApplicationObjectId    = $a.id
+                    ResourceAppId          = "$($rra.resourceAppId)"
+                    Resource               = if ($res) { $res.DisplayName } else { '' }
+                    PermissionType         = $ptype
+                    PermissionId           = "$($ra.id)"
+                    Permission             = $perm
+                    IsHighPrivilege        = Test-HighPrivilegePermission -Permission $perm
+                    Resolved               = $resolved
+                })
+            }
+        }
+    }
+    return $rows
+}
+
 function Invoke-Apps {
-    $apps = Get-GraphAll -Uri 'https://graph.microsoft.com/v1.0/applications?$select=id,appId,displayName,createdDateTime,signInAudience,keyCredentials,passwordCredentials&$top=999'
+    $apps = Get-GraphAll -Uri 'https://graph.microsoft.com/v1.0/applications?$select=id,appId,displayName,createdDateTime,signInAudience,keyCredentials,passwordCredentials,requiredResourceAccess&$top=999'
     $appRows = foreach ($a in $apps) {
         $credExpiry = @()
         foreach ($k in @($a.keyCredentials))    { if ($k.endDateTime) { $credExpiry += $k.endDateTime } }
@@ -1157,7 +1317,64 @@ function Invoke-Apps {
     Export-CsvSafe -Data $appRows -Name 'AppRegistrations.csv'
 
     $sps = Get-GraphAll -Uri "https://graph.microsoft.com/v1.0/servicePrincipals?`$select=id,appId,displayName,appOwnerOrganizationId,servicePrincipalType,preferredSingleSignOnMode,accountEnabled,tags,createdDateTime&`$top=999"
-    $spRows = foreach ($sp in ($sps | Where-Object { $_.appOwnerOrganizationId -ne $script:MicrosoftTenantId })) {
+    $nonMsSps = @($sps | Where-Object { $_.appOwnerOrganizationId -ne $script:MicrosoftTenantId })
+
+    # --- Granted permissions per enterprise app (AppPermissions.csv) ---------
+    # Learn: https://learn.microsoft.com/en-us/graph/api/serviceprincipal-list-approleassignments
+    #        https://learn.microsoft.com/en-us/graph/api/oauth2permissiongrant-list
+    Write-Log 'Apps: collecting granted permissions per enterprise app...'
+    $grants = @()
+    try {
+        $grants = @(Get-GraphAll -Uri 'https://graph.microsoft.com/v1.0/oauth2PermissionGrants?$select=clientId,consentType,resourceId,scope,principalId')
+        $script:Summary.metrics.oauth2GrantClients = @($grants | Group-Object clientId).Count
+    } catch {
+        Write-Log "oauth2PermissionGrants failed: $($_.Exception.Message)" -Level WARN
+    }
+    $assignMap = @{}
+    $ai = 0
+    foreach ($sp in $nonMsSps) {
+        $ai++
+        if (($ai % 50) -eq 0) { Write-Log "  appRoleAssignments $ai/$($nonMsSps.Count)" }
+        try {
+            $assignMap["$($sp.id)"] = @(Get-GraphAll -Uri "https://graph.microsoft.com/v1.0/servicePrincipals/$($sp.id)/appRoleAssignments?`$select=resourceId,appRoleId" |
+                ForEach-Object { @{ resourceId = "$($_.resourceId)"; appRoleId = "$($_.appRoleId)" } })
+        } catch {
+            $assignMap["$($sp.id)"] = @()
+            Write-Log "appRoleAssignments for '$($sp.displayName)' failed: $($_.Exception.Message)" -Level WARN
+        }
+    }
+    # Resource service principals fetched once each (cache by object id)
+    $resourceIds = @(
+        ($assignMap.Values | ForEach-Object { $_ } | ForEach-Object { $_.resourceId }) +
+        ($grants | ForEach-Object { "$($_.resourceId)" }) |
+        Where-Object { $_ } | Sort-Object -Unique)
+    $resourceMap = @{}
+    foreach ($rid in $resourceIds) {
+        try {
+            $rsp = Invoke-MgGraphRequest -OutputType PSObject -Method GET -Uri "https://graph.microsoft.com/v1.0/servicePrincipals/$rid`?`$select=id,appId,displayName,appRoles,oauth2PermissionScopes"
+            $roles = @{}; foreach ($r0 in @($rsp.appRoles))               { $roles["$($r0.id)"] = "$($r0.value)" }
+            $scps  = @{}; foreach ($s0 in @($rsp.oauth2PermissionScopes)) { $scps["$($s0.id)"]  = "$($s0.value)" }
+            $resourceMap[$rid] = @{ DisplayName = "$($rsp.displayName)"; AppId = "$($rsp.appId)"; Roles = $roles; Scopes = $scps }
+        } catch {
+            $resourceMap[$rid] = @{ DisplayName = ''; AppId = ''; Roles = @{}; Scopes = @{} }
+        }
+    }
+    $permRows = @(ConvertTo-AppPermissionRows -ClientServicePrincipals ($nonMsSps | ForEach-Object {
+            [pscustomobject]@{ id = "$($_.id)"; appId = "$($_.appId)"; displayName = "$($_.displayName)" } }) `
+        -RoleAssignmentsByClientId $assignMap -PermissionGrants $grants -ResourceServicePrincipals $resourceMap)
+    Export-CsvSafe -Data $permRows -Name 'AppPermissions.csv'
+    $appPermBySp = @{}; $delPermBySp = @{}; $highPermBySp = @{}
+    foreach ($r in $permRows) {
+        $sid = $r.ClientServicePrincipalId
+        if ($r.PermissionType -eq 'Application') { $appPermBySp[$sid] = [int]$appPermBySp[$sid] + 1 }
+        else                                     { $delPermBySp[$sid] = [int]$delPermBySp[$sid] + 1 }
+        if ($r.IsHighPrivilege) {
+            if (-not $highPermBySp[$sid]) { $highPermBySp[$sid] = [System.Collections.Generic.List[string]]::new() }
+            $highPermBySp[$sid].Add("$($r.PermissionType): $($r.Permission)")
+        }
+    }
+
+    $spRows = foreach ($sp in $nonMsSps) {
         [pscustomobject]@{
             Id                        = $sp.id
             AppId                     = $sp.appId
@@ -1168,6 +1385,9 @@ function Invoke-Apps {
             AccountEnabled            = $sp.accountEnabled
             Tags                      = ($sp.tags -join '; ')
             CreatedDateTime           = $sp.createdDateTime
+            ApplicationPermissionCount = [int]$appPermBySp["$($sp.id)"]
+            DelegatedPermissionCount   = [int]$delPermBySp["$($sp.id)"]
+            HighPrivilegePermissions   = (@($highPermBySp["$($sp.id)"]) -join '; ')
         }
     }
     Export-CsvSafe -Data $spRows -Name 'EnterpriseApps.csv'
@@ -1175,11 +1395,29 @@ function Invoke-Apps {
     $script:Summary.metrics.enterpriseAppCount   = $spRows.Count
     $script:Summary.metrics.ssoSamlApps          = @($spRows | Where-Object { $_.PreferredSingleSignOnMode -eq 'saml' }).Count
     $script:Summary.metrics.ssoOidcApps          = @($spRows | Where-Object { $_.PreferredSingleSignOnMode -eq 'oidc' }).Count
+    $script:Summary.metrics.appsWithApplicationPermissions = @($appPermBySp.Keys).Count
+    $script:Summary.metrics.appsWithHighPrivilegePermissions = @($highPermBySp.Keys).Count
+    $script:Summary.metrics.appPermissionRowCount = $permRows.Count
 
-    try {
-        $grants = Get-GraphAll -Uri 'https://graph.microsoft.com/v1.0/oauth2PermissionGrants?$select=clientId'
-        $script:Summary.metrics.oauth2GrantClients = @($grants | Group-Object clientId).Count
-    } catch {}
+    # --- Requested permissions on app registrations (AppRegistrationPermissions.csv)
+    # Learn: https://learn.microsoft.com/en-us/graph/api/resources/requiredresourceaccess
+    $resByAppId = @{}
+    foreach ($rid in $resourceMap.Keys) { if ($resourceMap[$rid].AppId) { $resByAppId[$resourceMap[$rid].AppId] = $resourceMap[$rid] } }
+    $missingRes = @($apps | ForEach-Object { $_.requiredResourceAccess } | ForEach-Object { "$($_.resourceAppId)" } |
+        Where-Object { $_ -and -not $resByAppId.ContainsKey($_) } | Sort-Object -Unique)
+    foreach ($aid in $missingRes) {
+        try {
+            $rsp = @(Get-GraphAll -Uri "https://graph.microsoft.com/v1.0/servicePrincipals?`$filter=appId eq '$aid'&`$select=id,appId,displayName,appRoles,oauth2PermissionScopes" | Select-Object -First 1)
+            if ($rsp.Count -gt 0) {
+                $roles = @{}; foreach ($r0 in @($rsp[0].appRoles))               { $roles["$($r0.id)"] = "$($r0.value)" }
+                $scps  = @{}; foreach ($s0 in @($rsp[0].oauth2PermissionScopes)) { $scps["$($s0.id)"]  = "$($s0.value)" }
+                $resByAppId[$aid] = @{ DisplayName = "$($rsp[0].displayName)"; Roles = $roles; Scopes = $scps }
+            }
+        } catch {}
+    }
+    $regPermRows = @(ConvertTo-AppRegistrationPermissionRows -Applications $apps -ResourceByAppId $resByAppId)
+    if ($regPermRows.Count -gt 0) { Export-CsvSafe -Data $regPermRows -Name 'AppRegistrationPermissions.csv' }
+    $script:Summary.metrics.appRegistrationPermissionRowCount = $regPermRows.Count
 }
 
 function Invoke-AppSignIns {
@@ -1725,6 +1963,27 @@ function Invoke-Exchange {
     $script:Summary.metrics.journalRuleCount   = $jrules.Count
     $script:Summary.metrics.distributionGroupCount = $allDg.Count
     $script:Summary.metrics.mailUserCount = @($mailUsers).Count
+
+    # Organization-wide Outlook/Office add-ins (admin-deployed)
+    # https://learn.microsoft.com/en-us/powershell/module/exchange/get-app
+    try {
+        $oapps = @(Get-App -OrganizationApp -ErrorAction Stop)
+        $oaRows = foreach ($a in $oapps) {
+            [pscustomobject]@{
+                DisplayName         = "$($a.DisplayName)"
+                AppVersion          = "$($a.AppVersion)"
+                Enabled             = "$($a.Enabled)"
+                ProviderName        = "$($a.ProviderName)"
+                DefaultStateForUser = "$($a.DefaultStateForUser)"
+                ProvidedTo          = "$($a.ProvidedTo)"
+                UserList            = (@($a.UserList) -join '; ')
+            }
+        }
+        if ($oaRows.Count -gt 0) { Export-CsvSafe -Data $oaRows -Name 'OutlookAddins.csv' }
+        $script:Summary.metrics.outlookAddinCount = $oaRows.Count
+    } catch {
+        Write-Log "Get-App -OrganizationApp failed: $($_.Exception.Message)" -Level WARN
+    }
 }
 
 function Invoke-Purview {
@@ -1929,6 +2188,23 @@ function Invoke-SharePoint {
             Write-Log "Get-SPODataEncryptionPolicy not available in the installed SPO module - Customer Key not checked." -Level WARN
         }
     } catch { Write-Log "Get-SPODataEncryptionPolicy failed: $($_.Exception.Message)" -Level WARN }
+
+    # Tenant app catalog apps (installed apps incl. SharePoint add-ins/SPFx)
+    # https://learn.microsoft.com/en-us/powershell/module/microsoft.online.sharepoint.powershell/get-spoappinfo
+    try {
+        $appInfo = @(Get-SPOAppInfo -Name ' ' -ErrorAction Stop)
+        $acRows = foreach ($ai in $appInfo) {
+            [pscustomobject]@{
+                Name      = "$($ai.Name)"
+                ProductId = "$($ai.ProductId)"
+                Source    = "$($ai.Source)"
+            }
+        }
+        if ($acRows.Count -gt 0) { Export-CsvSafe -Data $acRows -Name 'SharePointAppCatalog.csv' }
+        $script:Summary.metrics.sharePointAppCatalogCount = $acRows.Count
+    } catch {
+        Write-Log "Get-SPOAppInfo failed: $($_.Exception.Message)" -Level WARN
+    }
 }
 
 function Invoke-Teams {
@@ -1983,6 +2259,233 @@ function Invoke-Teams {
     $script:Summary.metrics.standardChannelCount = $standardCh
     $script:Summary.metrics.privateChannelCount  = $privateCh
     $script:Summary.metrics.sharedChannelCount   = $sharedCh
+
+    # Org-uploaded Teams apps in the tenant app catalog
+    # https://learn.microsoft.com/en-us/graph/api/appcatalogs-list-teamsapps
+    $catalogAppIds = @{}
+    try {
+        $cat = @(Get-GraphAll -Uri "https://graph.microsoft.com/v1.0/appCatalogs/teamsApps?`$filter=distributionMethod eq 'organization'&`$select=id,externalId,displayName,distributionMethod")
+        $catRows = foreach ($a in $cat) {
+            $catalogAppIds["$($a.id)"] = $true
+            [pscustomobject]@{
+                Id                 = $a.id
+                ExternalId         = "$($a.externalId)"
+                DisplayName        = $a.displayName
+                DistributionMethod = "$($a.distributionMethod)"
+            }
+        }
+        if ($catRows.Count -gt 0) { Export-CsvSafe -Data $catRows -Name 'TeamsCustomApps.csv' }
+        $script:Summary.metrics.teamsCustomAppCount = $catRows.Count
+    } catch {
+        Write-Log "Teams app catalog failed: $($_.Exception.Message)" -Level WARN
+        $script:Summary.skippedSections['TeamsApps'] = "Teams app catalog not collected: $($_.Exception.Message)"
+    }
+
+    # Apps installed per team (all added apps incl. third-party store apps;
+    # IsOrgCatalogApp marks the ones uploaded to the tenant catalog)
+    # https://learn.microsoft.com/en-us/graph/api/team-list-installedapps
+    $instRows = [System.Collections.Generic.List[object]]::new()
+    :team foreach ($t in $teamGroups) {
+        try {
+            $inst = @(Get-GraphAll -Uri "https://graph.microsoft.com/v1.0/teams/$($t.id)/installedApps?`$expand=teamsAppDefinition(`$select=displayName,teamsAppId)")
+            foreach ($ia in $inst) {
+                $def  = $ia.teamsAppDefinition
+                $taid = if ($def) { "$($def.teamsAppId)" } else { '' }
+                $instRows.Add([pscustomobject]@{
+                    TeamName        = $t.displayName
+                    TeamId          = $t.id
+                    AppDisplayName  = if ($def) { "$($def.displayName)" } else { '' }
+                    TeamsAppId      = $taid
+                    InstallationId  = $ia.id
+                    IsOrgCatalogApp = [bool]($taid -and $catalogAppIds[$taid])
+                })
+            }
+        } catch {
+            if (Test-GraphForbidden $_) {
+                $script:Summary.skippedSections['TeamsInstalledApps'] = "Installed Teams apps not collected (403): $($_.Exception.Message)"
+                Write-Log "Installed Teams apps not accessible (403) - remaining teams skipped." -Level WARN
+                break team
+            }
+            Write-Log "Installed apps for team '$($t.displayName)' failed: $($_.Exception.Message)" -Level WARN
+        }
+    }
+    if ($instRows.Count -gt 0) { Export-CsvSafe -Data $instRows.ToArray() -Name 'TeamsInstalledApps.csv' }
+    $script:Summary.metrics.teamsInstalledAppCount = $instRows.Count
+}
+
+function Get-ObjProp {
+    # StrictMode-safe property reader for the PSCustomObjects the Power Platform
+    # admin module returns (properties live under .Internal.properties.*).
+    param([object]$Obj, [string]$Name)
+    if ($null -eq $Obj) { return $null }
+    if ($Obj -is [System.Collections.IDictionary]) {
+        if ($Obj.Contains($Name)) { return $Obj[$Name] }
+        return $null
+    }
+    if ($Obj.PSObject.Properties[$Name]) { return $Obj.$Name }
+    return $null
+}
+
+function Invoke-PowerPlatform {
+    # Power Platform inventory via Microsoft.PowerApps.Administration.PowerShell
+    # (runs in its own child process - the module only works via
+    # -UseWindowsPowerShell in PS7, like the SPO module).
+    # https://learn.microsoft.com/en-us/powershell/module/microsoft.powerapps.administration.powershell/
+    if (-not $script:PowerPlatformConnected) { throw 'Power Platform admin session not connected' }
+
+    $envs = @(Get-AdminPowerAppEnvironment -ErrorAction Stop)
+    $envRows = foreach ($e in $envs) {
+        $eProps  = Get-ObjProp $e.Internal 'properties'
+        $dvMeta  = Get-ObjProp $eProps 'linkedEnvironmentMetadata'
+        $envName = if ($e.EnvironmentName) { "$($e.EnvironmentName)" } else { "$($e.Name)" }
+        [pscustomobject]@{
+            EnvironmentName = $envName
+            DisplayName     = "$($e.DisplayName)"
+            EnvironmentType = "$($e.EnvironmentType)"
+            Location        = "$($e.Location)"
+            IsDefault       = [bool](Get-ObjProp $eProps 'isDefault')
+            HasDataverse    = [bool](Get-ObjProp $dvMeta 'instanceUrl')
+            CreatedTime     = "$($e.CreatedTime)"
+        }
+    }
+    Export-CsvSafe -Data $envRows -Name 'PowerPlatformEnvironments.csv'
+
+    $appRows       = [System.Collections.Generic.List[object]]::new()
+    $flowRows      = [System.Collections.Generic.List[object]]::new()
+    $connectorRows = [System.Collections.Generic.List[object]]::new()
+    foreach ($e in $envs) {
+        $envName = if ($e.EnvironmentName) { "$($e.EnvironmentName)" } else { "$($e.Name)" }
+        $envDisp = if ($e.DisplayName) { "$($e.DisplayName)" } else { $envName }
+
+        try {
+            foreach ($a in @(Get-AdminPowerApp -EnvironmentName $envName -ErrorAction Stop)) {
+                $aProps = Get-ObjProp $a.Internal 'properties'
+                $owner  = Get-ObjProp $a 'Owner'
+                $ownerId = if (Get-ObjProp $owner 'userPrincipalName') { Get-ObjProp $owner 'userPrincipalName' }
+                           elseif (Get-ObjProp $owner 'email')          { Get-ObjProp $owner 'email' }
+                           else                                        { Get-ObjProp $owner 'displayName' }
+                $conns = @((Get-ObjProp $aProps 'connectionReferences') |
+                    ForEach-Object { $_.PSObject.Properties.Name } | Sort-Object -Unique)
+                $shared = Get-ObjProp $aProps 'sharedUsers'
+                $appRows.Add([pscustomobject]@{
+                    EnvironmentName   = $envDisp
+                    EnvironmentId     = $envName
+                    AppName           = "$($a.AppName)"
+                    DisplayName       = "$($a.DisplayName)"
+                    AppType           = "$(Get-ObjProp $aProps 'appType')"
+                    Owner             = "$ownerId"
+                    CreatedTime       = "$($a.CreatedTime)"
+                    LastModifiedTime  = "$($a.LastModifiedTime)"
+                    SharedWithCount   = if ($shared) { @($shared).Count } else { '' }
+                    ConnectorsUsed    = ($conns -join '; ')
+                })
+            }
+        } catch {
+            Write-Log "Get-AdminPowerApp failed for environment $envDisp : $($_.Exception.Message)" -Level WARN
+        }
+
+        try {
+            foreach ($f in @(Get-AdminFlow -EnvironmentName $envName -ErrorAction Stop)) {
+                $fProps  = Get-ObjProp $f.Internal 'properties'
+                $defSum  = Get-ObjProp $fProps 'definitionSummary'
+                $trig    = @(Get-ObjProp $defSum 'triggers' | Select-Object -First 1)
+                $trigger = if ($trig.Count -gt 0) { "$(Get-ObjProp $trig[0] 'type')" } else { '' }
+                $fConns  = @((Get-ObjProp $fProps 'connectionReferences') |
+                    ForEach-Object { $_.PSObject.Properties.Name } | Sort-Object -Unique)
+                $creator = Get-ObjProp $f 'CreatedBy'
+                $creatorId = if (Get-ObjProp $creator 'userPrincipalName') { Get-ObjProp $creator 'userPrincipalName' }
+                             elseif (Get-ObjProp $creator 'email')           { Get-ObjProp $creator 'email' }
+                             else                                           { Get-ObjProp $creator 'displayName' }
+                $flowRows.Add([pscustomobject]@{
+                    EnvironmentName  = $envDisp
+                    EnvironmentId    = $envName
+                    FlowName         = "$($f.FlowName)"
+                    DisplayName      = "$($f.DisplayName)"
+                    State            = "$(Get-ObjProp $fProps 'state')"
+                    Owner            = "$creatorId"
+                    TriggerType      = $trigger
+                    ConnectorsUsed   = ($fConns -join '; ')
+                    CreatedTime      = "$($f.CreatedTime)"
+                    LastModifiedTime = "$($f.LastModifiedTime)"
+                })
+            }
+        } catch {
+            Write-Log "Get-AdminFlow failed for environment $envDisp : $($_.Exception.Message)" -Level WARN
+        }
+
+        try {
+            foreach ($c in @(Get-AdminPowerAppConnector -EnvironmentName $envName -ErrorAction Stop)) {
+                # Get-AdminPowerAppConnector returns the environment's custom connectors
+                $cCreator = Get-ObjProp $c 'Creator'
+                $ccId = if (Get-ObjProp $cCreator 'userPrincipalName') { Get-ObjProp $cCreator 'userPrincipalName' }
+                        else { Get-ObjProp $cCreator 'displayName' }
+                $connectorRows.Add([pscustomobject]@{
+                    EnvironmentName = $envDisp
+                    EnvironmentId   = $envName
+                    ConnectorName   = "$($c.ConnectorName)"
+                    DisplayName     = "$($c.DisplayName)"
+                    ConnectorType   = 'Custom'
+                    CreatedBy       = "$ccId"
+                    CreatedTime     = "$($c.CreatedTime)"
+                })
+            }
+        } catch {
+            Write-Log "Get-AdminPowerAppConnector failed for environment $envDisp : $($_.Exception.Message)" -Level WARN
+        }
+    }
+    if ($appRows.Count -gt 0)       { Export-CsvSafe -Data $appRows.ToArray()       -Name 'PowerApps.csv' }
+    if ($flowRows.Count -gt 0)      { Export-CsvSafe -Data $flowRows.ToArray()      -Name 'PowerAutomateFlows.csv' }
+    if ($connectorRows.Count -gt 0) { Export-CsvSafe -Data $connectorRows.ToArray() -Name 'PowerPlatformConnectors.csv' }
+
+    # DLP policies (tenant-wide) - https://learn.microsoft.com/en-us/powershell/module/microsoft.powerapps.administration.powershell/get-dlppolicy
+    try {
+        $dlpRows = foreach ($d in @(Get-DlpPolicy -ErrorAction Stop)) {
+            $groups = Get-ObjProp $d 'connectorGroups'
+            $summary = @($groups | ForEach-Object { "$(Get-ObjProp $_ 'classification'):$((Get-ObjProp $_ 'connectors').Count)" }) -join '; '
+            [pscustomobject]@{
+                PolicyName        = "$($d.PolicyName)"
+                DisplayName       = "$($d.DisplayName)"
+                DefaultGroup      = "$(Get-ObjProp $d 'defaultConnectorsClassification')"
+                EnvironmentCount  = @($d.environments).Count
+                ConnectorGroups   = $summary
+                CreatedTime       = "$($d.CreatedTime)"
+            }
+        }
+        if ($dlpRows.Count -gt 0) { Export-CsvSafe -Data $dlpRows -Name 'PowerPlatformDlpPolicies.csv' }
+        $script:Summary.metrics.powerPlatformDlpCount = $dlpRows.Count
+    } catch {
+        Write-Log "Get-DlpPolicy failed: $($_.Exception.Message)" -Level WARN
+    }
+
+    # Power BI workspaces (optional module - separate prompt-less sign-in via the same identity)
+    # https://learn.microsoft.com/en-us/powershell/module/microsoftpowerbimgmt.workspaces/get-powerbiworkspace
+    if (Get-Module -ListAvailable MicrosoftPowerBIMgmt) {
+        try {
+            Import-Module MicrosoftPowerBIMgmt -DisableNameChecking -ErrorAction Stop
+            $null = Connect-PowerBIServiceAccount -Tenant $script:TenantGuid -ErrorAction Stop
+            $ws = @(Get-PowerBIWorkspace -Scope Organization -ErrorAction Stop)
+            $wsRows = foreach ($w in $ws) {
+                [pscustomobject]@{
+                    Id    = "$($w.Id)"
+                    Name  = "$($w.Name)"
+                    Type  = "$($w.Type)"
+                    State = "$($w.State)"
+                }
+            }
+            if ($wsRows.Count -gt 0) { Export-CsvSafe -Data $wsRows -Name 'PowerBIWorkspaces.csv' }
+            $script:Summary.metrics.powerBiWorkspaceCount = $wsRows.Count
+        } catch {
+            Write-Log "Power BI collection failed: $($_.Exception.Message)" -Level WARN
+            $script:Summary.skippedSections['PowerBI'] = "Power BI workspaces not collected: $($_.Exception.Message)"
+        }
+    } else {
+        $script:Summary.skippedSections['PowerBI'] = 'Module MicrosoftPowerBIMgmt missing - install it to include Power BI workspaces'
+    }
+
+    $script:Summary.metrics.powerPlatformEnvironmentCount = $envRows.Count
+    $script:Summary.metrics.powerAppCount                 = $appRows.Count
+    $script:Summary.metrics.powerAutomateFlowCount        = $flowRows.Count
+    $script:Summary.metrics.customConnectorCount          = $connectorRows.Count
 }
 
 function Invoke-TeamsPhone {
@@ -2366,6 +2869,7 @@ $sectionFunctions = @{
     SharePoint  = { Invoke-SharePoint }
     Teams       = { Invoke-Teams }
     TeamsPhone  = { Invoke-TeamsPhone }
+    PowerPlatform = { Invoke-PowerPlatform }
     Devices     = { Invoke-Devices }
     Usage       = { Invoke-Usage }
     Dns         = { Invoke-Dns }
@@ -2379,6 +2883,7 @@ $groupSections = @{
     Exchange   = @('Exchange','Purview','TargetExchange')
     SharePoint = @('OneDrive','SharePoint')
     Teams      = @('TeamsPhone')
+    PowerPlatform = @('PowerPlatform')
 }
 
 $allSections = if ($Role -eq 'Source') { $SourceSections } else { $TargetSections }
@@ -2441,6 +2946,7 @@ if ($ServiceGroup) {
     $script:IppsConnected  = $false
     $script:TeamsConnected = $false
     $script:SpoAvailable   = $false
+    $script:PowerPlatformConnected = $false
     $script:InitialDomain  = $null
     $script:OrgDisplayName = $null
     $script:GuestMode      = $false
@@ -2473,7 +2979,8 @@ if ($ServiceGroup) {
                       'UserAuthenticationMethod.Read.All','DeviceManagementManagedDevices.Read.All',
                       'DeviceManagementConfiguration.Read.All','DeviceManagementServiceConfig.Read.All',
                       'DeviceManagementApps.Read.All','TeamSettings.Read.All','Channel.ReadBasic.All','TeamMember.Read.All',
-                      'Domain.Read.All','Sites.Read.All','eDiscovery.Read.All')
+                      'Domain.Read.All','Sites.Read.All','eDiscovery.Read.All',
+                      'AppCatalog.Read.All','TeamsAppInstallation.ReadForTeam','Tasks.Read')
                 } else {
                     @('User.Read.All','Directory.Read.All','Organization.Read.All','Domain.Read.All','Policy.Read.All','AuditLog.Read.All')
                 }
@@ -2736,6 +3243,51 @@ if ($ServiceGroup) {
                     $toRun = @()
                 }
             }
+            'PowerPlatform' {
+                # Microsoft.PowerApps.Administration.PowerShell is Windows
+                # PowerShell-only; import via -UseWindowsPowerShell like the SPO
+                # module. Sign-in: Power Platform admin / Global admin.
+                # https://learn.microsoft.com/en-us/powershell/module/microsoft.powerapps.administration.powershell/
+                if (-not (Get-Module -ListAvailable Microsoft.PowerApps.Administration.PowerShell)) {
+                    $script:Summary.skippedSections['PowerPlatform'] = 'Module Microsoft.PowerApps.Administration.PowerShell missing - install it with Install-Module Microsoft.PowerApps.Administration.PowerShell to include Power Platform'
+                    $toRun = @()
+                    break
+                }
+                try {
+                    if (-not (Get-Command Add-PowerAppsAccount -ErrorAction SilentlyContinue)) {
+                        Import-Module Microsoft.PowerApps.Administration.PowerShell -UseWindowsPowerShell -DisableNameChecking -WarningAction SilentlyContinue -ErrorAction Stop
+                    }
+                    # -TenantID pins the sign-in to this tenant (the account may be a guest elsewhere)
+                    $null = Add-PowerAppsAccount -TenantID $script:TenantGuid -ErrorAction Stop
+                    # Tenant guard: the environments returned must belong to this tenant
+                    $ppTenantId = $null
+                    try {
+                        $env0 = @(Get-AdminPowerAppEnvironment -ErrorAction Stop | Select-Object -First 1)
+                        if ($env0.Count -gt 0) {
+                            $eProps = Get-ObjProp $env0[0].Internal 'properties'
+                            $ppTenantId = "$(Get-ObjProp $eProps 'tenantId')"
+                            if (-not $ppTenantId) { $ppTenantId = "$(Get-ObjProp (Get-ObjProp $eProps 'linkedEnvironmentMetadata') 'tenantId')" }
+                        }
+                    } catch {}
+                    if (-not $ppTenantId) {
+                        # Environment objects do not always expose a tenant ID; the sign-in
+                        # itself was pinned with -TenantID, so continue and say so.
+                        Write-Log "Power Platform tenant ID not exposed by the environment objects - relying on Add-PowerAppsAccount -TenantID $($script:TenantGuid)." -Level WARN
+                        $script:PowerPlatformConnected = $true
+                    } elseif ($ppTenantId -ne $script:TenantGuid) {
+                        Write-Log "Power Platform connected to the wrong tenant ($ppTenantId)." -Level ERROR
+                        $script:Summary.failedSections['PowerPlatform'] = "Power Platform connected to the wrong tenant ($ppTenantId)"
+                        $toRun = @()
+                    } else {
+                        $script:PowerPlatformConnected = $true
+                        Write-Log "Power Platform connected (tenant: $ppTenantId)."
+                    }
+                } catch {
+                    Write-Log "Add-PowerAppsAccount failed: $($_.Exception.Message)" -Level WARN
+                    $script:Summary.failedSections['PowerPlatform'] = "Add-PowerAppsAccount failed: $($_.Exception.Message)"
+                    $toRun = @()
+                }
+            }
         }
 
         # ---- Run the group's sections ----
@@ -2791,6 +3343,7 @@ $needGraph  = @($requested | Where-Object { $groupSections.Graph -contains $_ })
 $needEXO    = @($requested | Where-Object { $groupSections.Exchange -contains $_ }).Count -gt 0
 $needSPO    = @($requested | Where-Object { $groupSections.SharePoint -contains $_ }).Count -gt 0
 $needTeams  = $requested -contains 'Teams'
+$needPP     = $requested -contains 'PowerPlatform'
 $needDns    = $requested -contains 'Dns'
 
 $pwshExe = Join-Path $PSHOME 'pwsh.exe'
@@ -2802,6 +3355,7 @@ function Start-Child {
         'Exchange'   { 'Exchange Online + Purview (mailboxes, holds, mail flow, compliance)' }
         'SharePoint' { 'SharePoint Online admin (sites, OneDrive, tenant settings)' }
         'Teams'      { 'Microsoft Teams (telephony)' }
+        'PowerPlatform' { 'Power Platform (environments, apps, flows, connectors, Power BI)' }
     }
     Write-Host "`n>>> Sign in to $TenantName ($script:TenantGuid) for $Group - $label" -ForegroundColor Cyan
     Write-Log "Starting child process: $Group $(if ($ChildSections) { "[$($ChildSections -join ', ')]" })"
@@ -2928,7 +3482,13 @@ if (-not $abort -and $needTeams) {
     }
 }
 
-# 5) DNS in the parent process (no module needed)
+# 5) Power Platform child process (source role only - extra admin sign-in)
+if (-not $abort -and $needPP) {
+    $code = Start-Child -Group 'PowerPlatform' -ChildSections @('PowerPlatform')
+    $childGroupsRun.Add('PowerPlatform')
+}
+
+# 6) DNS in the parent process (no module needed)
 if (-not $abort -and $needDns) {
     Write-Log "--- Section: Dns ---"
     try {

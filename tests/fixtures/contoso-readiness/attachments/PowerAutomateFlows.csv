@@ -1,0 +1,2 @@
+EnvironmentName,EnvironmentId,FlowName,DisplayName,State,Owner,TriggerType,ConnectorsUsed,CreatedTime,LastModifiedTime
+Contoso (default),aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee,flow-1,Notify on new item,Started,admin@contoso.com,ApiConnection,shared_sharepointonline;shared_office365,2025-02-01T09:00:00Z,2026-02-01T10:00:00Z

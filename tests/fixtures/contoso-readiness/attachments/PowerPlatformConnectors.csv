@@ -1,0 +1,2 @@
+EnvironmentName,EnvironmentId,ConnectorName,DisplayName,ConnectorType,CreatedBy,CreatedTime
+Contoso (default),aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee,conn-1,Contoso ERP,Custom,admin@contoso.com,2025-03-01T09:00:00Z

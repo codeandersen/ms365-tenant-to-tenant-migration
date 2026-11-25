@@ -138,7 +138,8 @@ Teams-connected site carries **SharePoint content only** — not the Teams struc
 | Private and shared channels and their sites | Recreate (channel sites not covered by the group-site move) | [Learn](.../cross-tenant-sharepoint-migration) |
 | Team settings and membership | Recreate; identity mapping preserves file permissions only for mapped users/groups | [Learn](.../cross-tenant-sharepoint-migration) |
 | Microsoft 365 group mailbox and calendar | Not supported by mailbox migration | [Learn](.../cross-tenant-mailbox-migration) |
-| Planner, Loop, Forms, Whiteboard, wiki, OneNote notebooks | Recreate or third-party | [Playbook assumption — state source per workload] |
+| Planner, Loop, Forms, Whiteboard, wiki, OneNote notebooks | Recreate or third-party (Planner plans inventoried in `PlannerPlans.csv`) | [Playbook assumption — state source per workload] |
+| Org-uploaded Teams apps (tenant app catalog) | Download packages and re-upload to the target catalog (`TeamsCustomApps.csv`, `TeamsInstalledApps.csv`) | [Learn](.../appcatalogs-list-teamsapps) |
 | Teams Phone: numbers, auto attendants, call queues, policies | Port/rebuild in target | [Playbook assumption] |
 
 ## 4. SharePoint sites (cross-tenant SharePoint migration)
@@ -172,7 +173,11 @@ Teams-connected site carries **SharePoint content only** — not the Teams struc
 | Cross-cloud moves (e.g. GCC → commercial) | Not supported | [Learn](.../cross-tenant-mailbox-migration) |
 | Same domain verified in both tenants simultaneously | Not possible — domain must leave the source first | [Learn](.../migration-orchestrator-1-overview) |
 | Project Online | Not covered — third-party | [Playbook assumption] |
-| Power Platform environments/apps | Recreate | [Playbook assumption] |
+| Power Platform environments, apps, flows, custom connectors, DLP | Export/import (solutions or per-item) — inventory in `PowerPlatformEnvironments.csv`/`PowerApps.csv`/`PowerAutomateFlows.csv`/`PowerPlatformConnectors.csv` | [Playbook assumption] |
+| Power BI workspaces/reports/datasets | Redeploy in target — inventory in `PowerBIWorkspaces.csv` | [Playbook assumption] |
+| Organization Outlook add-ins | Redeploy in target — inventory in `OutlookAddins.csv` | [Playbook assumption] |
+| SharePoint tenant app catalog apps (add-ins/SPFx) | Redeploy packages in the target catalog — inventory in `SharePointAppCatalog.csv` | [Playbook assumption] |
+| Enterprise app API permissions (granted + requested) | Re-consent in target — inventory in `AppPermissions.csv`/`AppRegistrationPermissions.csv` | [Learn](.../oauth2permissiongrant-list) |
 | Viva Engage | Third-party/manual | [Playbook assumption] |
 | Bookings | Rebuild | [Playbook assumption] |
 

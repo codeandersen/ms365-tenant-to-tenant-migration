@@ -1,0 +1,3 @@
+TeamName,TeamId,AppDisplayName,TeamsAppId,InstallationId,IsOrgCatalogApp
+Contoso IT,team-1,Contoso Helper Bot,tc-1,inst-1,True
+Contoso HR,team-2,Polly,store-9,inst-2,False

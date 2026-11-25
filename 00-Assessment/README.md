@@ -69,6 +69,15 @@ New/updated collections for the readiness report:
 | `NamedLocations.csv` | `GET /identity/conditionalAccess/namedLocations` | trusted IP ranges / countries - hand to the target admin via `Export-TrustedLocations.ps1`. Metrics `namedLocationCount`, `trustedIpLocationCount` |
 | `AuthMethodsPolicy.csv` | `GET /policies/authenticationMethodsPolicy` | per-method state (microsoftAuthenticator/fido2/temporaryAccessPass/sms) + registration campaign. Metrics `authMethod_<method>` |
 | `Security` section | now also runs for `-Role Target` (scopes include Policy.Read.All + AuditLog.Read.All) | target CA / named locations / auth methods feed the readiness report's sign-in section |
+| `AppPermissions.csv` | `GET /servicePrincipals/{id}/appRoleAssignments` + `GET /oauth2PermissionGrants` per non-Microsoft service principal ([appRoleAssignments](https://learn.microsoft.com/en-us/graph/api/serviceprincipal-list-approleassignments), [oauth2PermissionGrants](https://learn.microsoft.com/en-us/graph/api/oauth2permissiongrant-list)) | one row per granted permission: `PermissionType` Application/Delegated, `Resource`, `Permission`, `ConsentType` (Admin/User), `ConsentedUserCount` (count only, no IDs), `IsHighPrivilege`, `Resolved`. `EnterpriseApps.csv` gains `ApplicationPermissionCount`, `DelegatedPermissionCount`, `HighPrivilegePermissions` |
+| `AppRegistrationPermissions.csv` | `requiredResourceAccess` on `/applications` | requested (not necessarily granted) permissions per app registration, resolved to names via the resource service principals |
+| `TeamsCustomApps.csv` | `GET /appCatalogs/teamsApps?$filter=distributionMethod eq 'organization'` | org-uploaded Teams apps — [Learn](https://learn.microsoft.com/en-us/graph/api/appcatalogs-list-teamsapps) |
+| `TeamsInstalledApps.csv` | `GET /teams/{id}/installedApps?$expand=teamsAppDefinition` per team | added apps per team incl. third-party store apps; `IsOrgCatalogApp` marks tenant-catalog apps — [Learn](https://learn.microsoft.com/en-us/graph/api/team-list-installedapps) |
+| `PlannerPlans.csv` | `GET /groups/{id}/planner/plans` per M365 group | a 403 (missing `Tasks.Read` consent) is recorded in `skippedSections` and the remaining groups are skipped — [Learn](https://learn.microsoft.com/en-us/graph/api/plannergroup-list-plans) |
+| `OutlookAddins.csv` | `Get-App -OrganizationApp` (Exchange child only) | organization-wide Outlook add-ins — [Learn](https://learn.microsoft.com/en-us/powershell/module/exchange/get-app) |
+| `SharePointAppCatalog.csv` | `Get-SPOAppInfo -Name ' '` (SPO child only) | apps in the tenant app catalog (add-ins/SPFx) — [Learn](https://learn.microsoft.com/en-us/powershell/module/microsoft.online.sharepoint.powershell/get-spoappinfo) |
+| `PowerPlatformEnvironments.csv`, `PowerApps.csv`, `PowerAutomateFlows.csv`, `PowerPlatformConnectors.csv`, `PowerPlatformDlpPolicies.csv` | new `PowerPlatform` section in its own child process (`Add-PowerAppsAccount`, `Get-AdminPowerAppEnvironment`, `Get-AdminPowerApp`, `Get-AdminFlow`, `Get-AdminPowerAppConnector`, `Get-DlpPolicy`) | module `Microsoft.PowerApps.Administration.PowerShell` (imported via `-UseWindowsPowerShell` like SPO; Power Platform admin / Global admin sign-in). Skipped with a reason if the module is missing — [Learn](https://learn.microsoft.com/en-us/powershell/module/microsoft.powerapps.administration.powershell/) |
+| `PowerBIWorkspaces.csv` | `Get-PowerBIWorkspace -Scope Organization` inside the Power Platform child | optional module `MicrosoftPowerBIMgmt`; skipped with a reason if missing — [Learn](https://learn.microsoft.com/en-us/powershell/module/microsoftpowerbimgmt.workspaces/get-powerbiworkspace) |
 
 `Export-TrustedLocations.ps1` (offline, no tenant connection): builds the
 trusted-locations hand-over for the target admin from `NamedLocations.csv` + optional
@@ -100,9 +109,12 @@ an app unused; "inactive" verdicts come from the sign-in logs only.
 
 - PowerShell 7.2+
 - Modules: `Microsoft.Graph.Authentication`, `ExchangeOnlineManagement`,
-  `Microsoft.Online.SharePoint.PowerShell`, `MicrosoftTeams` (see
-  `tools\Test-ModuleHealth.ps1`)
-- Roles: Global Reader or Global Admin in the tenant. **SharePoint Administrator**
+  `Microsoft.Online.SharePoint.PowerShell`, `MicrosoftTeams`; optional for the
+  `PowerPlatform` section: `Microsoft.PowerApps.Administration.PowerShell`
+  (+ `MicrosoftPowerBIMgmt` for Power BI) (see `tools\Test-ModuleHealth.ps1`)
+- Roles: Global Reader or Global Admin in the tenant. **Power Platform
+  Administrator** (or Global Admin) is needed for the `PowerPlatform` section.
+  **SharePoint Administrator**
   is needed for full SPO coverage (`Get-SPOSite`, tenant settings, external
   users) and for the delegated `GET /sites/getAllSites` fallback — without it the
   fallback only has the usage reports, and site counts can be lower than the true

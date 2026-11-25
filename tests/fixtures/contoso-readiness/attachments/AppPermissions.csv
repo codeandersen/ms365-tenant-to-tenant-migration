@@ -1,0 +1,6 @@
+ClientDisplayName,ClientAppId,ClientServicePrincipalId,PermissionType,Resource,ResourceServicePrincipalId,Permission,ConsentType,ConsentedUserCount,IsHighPrivilege,Resolved
+Contoso CRM,app1,sp1,Application,Microsoft Graph,rsp1,Mail.ReadWrite,Admin,,True,True
+Contoso CRM,app1,sp1,Delegated,Microsoft Graph,rsp1,User.Read,Admin,,False,True
+Contoso Sync Tool,app3,sp3,Application,Office 365 Exchange Online,rsp2,full_access_as_app,Admin,,True,True
+Contoso Sync Tool,app3,sp3,Delegated,Microsoft Graph,rsp1,Mail.Send,User,4,True,True
+Legacy HR,app2,sp2,Application,Microsoft Graph,rsp1,42eb8f30-cb38-433e-9651-006680f3b238,Admin,,False,False

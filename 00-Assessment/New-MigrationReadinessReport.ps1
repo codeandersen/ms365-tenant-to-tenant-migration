@@ -87,6 +87,13 @@ function Test-CsvPresent {
     return (Test-Path (Join-Path $Base $Name))
 }
 
+function Test-Collected {
+    # CSV present, or the collector recorded the count metric (0 items -> no CSV is written)
+    param([string]$Csv, [string]$Metric)
+    if (Test-CsvPresent $Csv) { return $true }
+    return [bool]($invSummary -and $invSummary.PSObject.Properties[$Metric])
+}
+
 function ConvertTo-Num {
     param([object]$Value)
     if ($null -eq $Value -or "$Value" -eq '') { return 0 }
@@ -168,6 +175,18 @@ $mfaRegs      = Import-AttCsv 'MfaRegistration.csv'
 $autopilot    = Import-AttCsv 'AutopilotDevices.csv'
 $extUsers     = Import-AttCsv 'ExternalUsers.csv'
 $appSignIns   = Import-AttCsv 'AppSignInActivity.csv'
+$appPerms     = Import-AttCsv 'AppPermissions.csv'
+$ppEnvs       = Import-AttCsv 'PowerPlatformEnvironments.csv'
+$ppApps       = Import-AttCsv 'PowerApps.csv'
+$ppFlows      = Import-AttCsv 'PowerAutomateFlows.csv'
+$ppConnectors = Import-AttCsv 'PowerPlatformConnectors.csv'
+$ppDlp        = Import-AttCsv 'PowerPlatformDlpPolicies.csv'
+$pbiWs        = Import-AttCsv 'PowerBIWorkspaces.csv'
+$teamsCustom  = Import-AttCsv 'TeamsCustomApps.csv'
+$teamsInst    = Import-AttCsv 'TeamsInstalledApps.csv'
+$plannerPlans = Import-AttCsv 'PlannerPlans.csv'
+$outlookAddins= Import-AttCsv 'OutlookAddins.csv'
+$spoAppCat    = Import-AttCsv 'SharePointAppCatalog.csv'
 
 $invSummary = $null
 $invFailed  = $null
@@ -803,6 +822,7 @@ if ($servicePlans.Count -gt 0) {
         'Microsoft Forms'                   = '^(FORMS|OFFICEFORMS)'
         'Power Apps'                        = 'POWERAPPS'
         'Power Automate (Flow)'             = '^(FLOW|POWERAUTOMATE)'
+        'Microsoft Loop'                    = 'LOOP'
         'Viva Engage / Yammer'              = 'YAMMER'
         'Stream'                            = 'STREAM'
         'Bookings'                          = 'BOOKINGS'
@@ -818,10 +838,9 @@ if ($servicePlans.Count -gt 0) {
     $notInventoried.Add('Service-plan usage indicators (Planner/Forms/Power Platform/Viva Engage/Stream)')
 }
 
-$notInventoried.Add('Workflows (2010/2013), apps and Power Apps/Automate per site - must be recreated on the target')
-$notInventoried.Add('Teams apps, tabs and Planner plans per team')
+$notInventoried.Add('Workflows (2010/2013) and SPFx/web parts per site - must be recreated on the target')
+$notInventoried.Add('Teams tabs per team')
 $notInventoried.Add('Loop workspaces')
-$notInventoried.Add('Power Platform environments/apps')
 
 if ($decRows.Count -gt 0) {
     $null = $r.AppendLine((Format-Table @($decRows) @('Item', 'Count', 'Note')))
@@ -877,9 +896,91 @@ if ($appSignIns.Count -gt 0) {
     }
 }
 
-# 9. Not inventoried ----------------------------------------------------------------
+# 9. Apps and platform items to address --------------------------------------------------
 
-$null = $r.AppendLine('## 9. Not inventoried')
+$null = $r.AppendLine('## 9. Apps and platform items to address')
+$null = $r.AppendLine('')
+$null = $r.AppendLine('None of these are moved by Microsoft tools - they must be re-consented, exported or rebuilt in the target tenant.')
+$null = $r.AppendLine('')
+
+# Enterprise app permissions (AppPermissions.csv from the Apps inventory section)
+if (Test-CsvPresent 'AppPermissions.csv') {
+    $highPriv        = @($appPerms | Where-Object { $_.IsHighPrivilege -eq 'True' })
+    $appsWithAppPerm = @($appPerms | Where-Object { $_.PermissionType -eq 'Application' } | ForEach-Object ClientServicePrincipalId | Sort-Object -Unique)
+    $appsWithDelPerm = @($appPerms | Where-Object { $_.PermissionType -eq 'Delegated' }   | ForEach-Object ClientServicePrincipalId | Sort-Object -Unique)
+    $unresolved      = @($appPerms | Where-Object { $_.Resolved -eq 'False' })
+    $null = $r.AppendLine('### Enterprise app API permissions')
+    $null = $r.AppendLine('')
+    $null = $r.AppendLine("- **$($appsWithAppPerm.Count)** enterprise apps have application permissions, **$($appsWithDelPerm.Count)** have delegated grants - every consent must be re-created in the target tenant.")
+    if ($unresolved.Count -gt 0) {
+        $null = $r.AppendLine("- $($unresolved.Count) grant(s) could not be resolved to a permission name (the role GUID is listed) - look them up before rebuilding.")
+    }
+    if ($highPriv.Count -gt 0) {
+        $statusByApp = @{}
+        foreach ($s in $appSignIns) { $statusByApp["$($s.AppId)"] = "$($s.Status)" }
+        $hpRows = @($highPriv | Group-Object ClientAppId | ForEach-Object {
+            $g = $_.Group[0]
+            [pscustomobject]@{
+                App          = $g.ClientDisplayName
+                Permissions  = (@($_.Group | ForEach-Object { "$($_.PermissionType): $($_.Permission)" }) | Sort-Object -Unique) -join '; '
+                SignInStatus = $statusByApp["$($g.ClientAppId)"]
+            }
+        } | Sort-Object App)
+        $null = $r.AppendLine("- **$($hpRows.Count) app(s) hold high-privilege grants** (broad access - review each before re-consenting):")
+        $null = $r.AppendLine('')
+        $null = $r.AppendLine((Format-Table @($hpRows | Select-Object -First 20) @('App', 'Permissions', 'SignInStatus')))
+        if ($hpRows.Count -gt 20) { $null = $r.AppendLine("`n_...and $($hpRows.Count - 20) more - see AppPermissions.csv._") }
+        $null = $r.AppendLine('')
+    }
+} else {
+    $notInventoried.Add('Granted permissions per enterprise app (AppPermissions.csv) - re-run inventory with the Apps section')
+}
+
+# Power Platform
+if ((Test-Collected 'PowerPlatformEnvironments.csv' 'powerPlatformEnvironmentCount') -or (Test-CsvPresent 'PowerApps.csv') -or (Test-CsvPresent 'PowerAutomateFlows.csv')) {
+    $null = $r.AppendLine('### Power Platform')
+    $null = $r.AppendLine('')
+    $null = $r.AppendLine("- **$($ppEnvs.Count) environment(s), $($ppApps.Count) Power App(s), $($ppFlows.Count) flow(s), $($ppConnectors.Count) custom connector(s), $($ppDlp.Count) DLP policy/policies** - nothing moves between tenants; export/import apps and flows (solutions or per-item export) and rebuild connectors/DLP in the target.")
+    if ($ppEnvs.Count -gt 0) {
+        $null = $r.AppendLine('')
+        $null = $r.AppendLine((Format-Table $ppEnvs @('DisplayName', 'EnvironmentType', 'Location', 'IsDefault', 'HasDataverse')))
+        $null = $r.AppendLine('')
+    }
+} else {
+    $notInventoried.Add('Power Platform environments/apps/flows - re-run inventory with the PowerPlatform section (module Microsoft.PowerApps.Administration.PowerShell)')
+}
+if (Test-Collected 'PowerBIWorkspaces.csv' 'powerBiWorkspaceCount') {
+    $null = $r.AppendLine("- Power BI: **$($pbiWs.Count) workspace(s)** - reports/datasets must be redeployed in the target.")
+    $null = $r.AppendLine('')
+} else {
+    $notInventoried.Add('Power BI workspaces (PowerBIWorkspaces.csv) - optional: module MicrosoftPowerBIMgmt')
+}
+
+# Teams apps, Outlook add-ins, Planner, SharePoint app catalog
+$null = $r.AppendLine('### M365 workload apps')
+$null = $r.AppendLine('')
+if (Test-Collected 'TeamsCustomApps.csv' 'teamsCustomAppCount') {
+    $names = ($teamsCustom | ForEach-Object DisplayName | Sort-Object -Unique) -join ', '
+    $null = $r.AppendLine("- **$($teamsCustom.Count) org-uploaded Teams app(s)** - download the packages and upload them to the target app catalog$(if ($teamsCustom.Count -le 15) { ": $names" } else { '.' })")
+} else { $notInventoried.Add('Org-uploaded Teams apps (TeamsCustomApps.csv)') }
+if (Test-Collected 'TeamsInstalledApps.csv' 'teamsInstalledAppCount') {
+    $null = $r.AppendLine("- $($teamsInst.Count) installed Teams app instance(s) across teams ($($teamsCustom.Count) in the org catalog) - reinstall in the target teams.")
+} else { $notInventoried.Add('Installed Teams apps per team (TeamsInstalledApps.csv)') }
+if (Test-Collected 'PlannerPlans.csv' 'plannerPlanCount') {
+    $planGroups = @($plannerPlans | ForEach-Object GroupId | Sort-Object -Unique).Count
+    $null = $r.AppendLine("- **$($plannerPlans.Count) Planner plan(s)** in $planGroups M365 group(s) - Planner does not move; export tasks or recreate plans in the target.")
+} else { $notInventoried.Add('Planner plans per group (PlannerPlans.csv)') }
+if (Test-Collected 'OutlookAddins.csv' 'outlookAddinCount') {
+    $null = $r.AppendLine("- **$($outlookAddins.Count) organization Outlook add-in(s)** - redeploy in the target (centralized deployment / integrated apps).")
+} else { $notInventoried.Add('Organization Outlook add-ins (OutlookAddins.csv)') }
+if (Test-Collected 'SharePointAppCatalog.csv' 'sharePointAppCatalogCount') {
+    $null = $r.AppendLine("- **$($spoAppCat.Count) app(s) in the SharePoint tenant app catalog** (add-ins/SPFx) - redeploy the packages in the target catalog.")
+} else { $notInventoried.Add('SharePoint tenant app catalog apps (SharePointAppCatalog.csv)') }
+$null = $r.AppendLine('')
+
+# 10. Not inventoried --------------------------------------------------------------
+
+$null = $r.AppendLine('## 10. Not inventoried')
 $null = $r.AppendLine('')
 $null = $r.AppendLine('The report cannot see the following - check them manually or add them to the customer questions ([docs/Customer-Questions.md]($RepoDocs/Customer-Questions.md)):')
 $null = $r.AppendLine('')

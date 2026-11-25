@@ -109,6 +109,8 @@ $MinimumVersions = [ordered]@{
     'MicrosoftTeams'                                 = '8.0.0'
     'Microsoft.Graph.Beta.Migrations'                = '2.41.2'                    # Orchestrator cmdlets (New-/Get-/Test-MgBetaCrossTenantMigrationJob etc.)
     'CrossTenantIdentityMapping'                     = '0.0.34-Preview36668934'    # CTIM cmdlets - prerelease only, needs -AllowPrerelease
+    'Microsoft.PowerApps.Administration.PowerShell'  = '2.0.0'                     # optional: PowerPlatform inventory section
+    'MicrosoftPowerBIMgmt'                           = '1.2.1077'                  # optional: Power BI workspaces in the PowerPlatform section
 }
 $moduleUse = [ordered]@{
     'ExchangeOnlineManagement'                       = 'Tenant prep, identities, mail config, domain cutover'
@@ -119,6 +121,8 @@ $moduleUse = [ordered]@{
     'MicrosoftTeams'                                 = 'Teams federation prep + phone/voice inventory'
     'Microsoft.Graph.Beta.Migrations'                = 'Orchestrator migration jobs (05-Batches)'
     'CrossTenantIdentityMapping'                     = 'CTIM identity mapping (03-Identities)'
+    'Microsoft.PowerApps.Administration.PowerShell'  = 'Optional: Power Platform inventory (00-Assessment PowerPlatform section)'
+    'MicrosoftPowerBIMgmt'                           = 'Optional: Power BI workspace inventory (00-Assessment PowerPlatform section)'
 }
 
 # ------------------------------------------------------------ Microsoft Graph

@@ -1,0 +1,2 @@
+PolicyName,DisplayName,DefaultGroup,EnvironmentCount,ConnectorGroups,CreatedTime
+pol-1,Contoso baseline DLP,Business,2,Business:3;Blocked:2,2025-04-01T09:00:00Z
