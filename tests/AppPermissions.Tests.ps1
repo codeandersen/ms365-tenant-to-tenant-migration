@@ -4,7 +4,8 @@ BeforeAll {
     # Load only the function definitions we need - the main body never runs.
     $ast = [System.Management.Automation.Language.Parser]::ParseFile(
         $script:Collector, [ref]$null, [ref]$null)
-    $names = @('Test-HighPrivilegePermission', 'ConvertTo-AppPermissionRows',
+    $names = @('Test-HighPrivilegePermission', 'ConvertTo-AppPermissionSummaryRows',
+               'ConvertTo-AppDelegatedUserRows', 'Resolve-GraphUsersById',
                'ConvertTo-AppRegistrationPermissionRows', 'Get-ObjProp', 'Invoke-PowerPlatform')
     $defs = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true) |
         Where-Object { $names -contains $_.Name }
@@ -43,54 +44,100 @@ Describe 'Test-HighPrivilegePermission' {
     }
 }
 
-Describe 'ConvertTo-AppPermissionRows' {
+Describe 'ConvertTo-AppPermissionSummaryRows' {
     BeforeAll {
         $script:clients = @([pscustomobject]@{ id = 'sp-1'; appId = 'app-1'; displayName = 'Contoso App' })
         $script:assign = @{ 'sp-1' = @(
             @{ resourceId = 'rsp-graph'; appRoleId = 'role-1' }
             @{ resourceId = 'rsp-graph'; appRoleId = 'role-unresolved' }
         ) }
+        # 3 users consenting the same app+resource with overlapping scopes +
+        # one AllPrincipals (admin) grant on the same pair.
         $script:grants = @(
-            [pscustomobject]@{ clientId = 'sp-1'; resourceId = 'rsp-graph'; consentType = 'AllPrincipals'; principalId = $null; scope = 'User.Read Mail.Send' }
-            [pscustomobject]@{ clientId = 'sp-1'; resourceId = 'rsp-graph'; consentType = 'Principal';    principalId = 'user-a';   scope = 'Calendars.Read' }
-            [pscustomobject]@{ clientId = 'sp-1'; resourceId = 'rsp-graph'; consentType = 'Principal';    principalId = 'user-b';   scope = 'Calendars.Read' }
+            [pscustomobject]@{ clientId = 'sp-1'; resourceId = 'rsp-graph'; consentType = 'AllPrincipals'; principalId = $null;    scope = 'User.Read Mail.Send' }
+            [pscustomobject]@{ clientId = 'sp-1'; resourceId = 'rsp-graph'; consentType = 'Principal';    principalId = 'user-a'; scope = 'Calendars.Read Mail.Send' }
+            [pscustomobject]@{ clientId = 'sp-1'; resourceId = 'rsp-graph'; consentType = 'Principal';    principalId = 'user-b'; scope = 'Calendars.Read' }
+            [pscustomobject]@{ clientId = 'sp-1'; resourceId = 'rsp-graph'; consentType = 'Principal';    principalId = 'user-c'; scope = 'Calendars.Read Files.Read' }
         )
         $script:resources = @{ 'rsp-graph' = $script:graphRes }
-        $script:rows = @(ConvertTo-AppPermissionRows -ClientServicePrincipals $script:clients `
+        $script:rows = @(ConvertTo-AppPermissionSummaryRows -ClientServicePrincipals $script:clients `
             -RoleAssignmentsByClientId $script:assign -PermissionGrants $script:grants `
             -ResourceServicePrincipals $script:resources)
     }
 
-    It 'resolves application grants to permission names' {
-        $r = @($script:rows | Where-Object { $_.PermissionType -eq 'Application' -and $_.Permission -eq 'Mail.ReadWrite' })
-        $r.Count | Should -Be 1
-        $r[0].Resource      | Should -Be 'Microsoft Graph'
-        $r[0].Resolved      | Should -BeTrue
-        $r[0].IsHighPrivilege | Should -BeTrue
-        $r[0].ConsentType   | Should -Be 'Admin'
+    It 'emits one row per app+resource pair' {
+        $script:rows.Count | Should -Be 1
+        $script:rows[0].Resource | Should -Be 'Microsoft Graph'
     }
 
-    It 'keeps the GUID and marks Resolved=False for unknown appRoleIds' {
-        $r = @($script:rows | Where-Object { $_.PermissionType -eq 'Application' -and -not $_.Resolved })
-        $r.Count | Should -Be 1
-        $r[0].Permission | Should -Be 'role-unresolved'
+    It 'separates application and delegated permissions into own columns' {
+        $r = $script:rows[0]
+        $r.ApplicationPermissions           | Should -Be 'Mail.ReadWrite; role-unresolved'
+        $r.DelegatedPermissionsAdminConsent | Should -Be 'Mail.Send; User.Read'
+        $r.DelegatedPermissionsUserConsent  | Should -Be 'Calendars.Read; Files.Read; Mail.Send'
+        $r.UserConsentCount                 | Should -Be 3
     }
 
-    It 'splits delegated grants into one row per scope' {
-        $delegated = @($script:rows | Where-Object PermissionType -eq 'Delegated')
-        $delegated.Count | Should -Be 4   # User.Read + Mail.Send (admin) + 2x Calendars.Read (user)
-        @($delegated | Where-Object { $_.Permission -eq 'Mail.Send' }).Count | Should -Be 1
+    It 'flags high-privilege subsets separately per kind' {
+        $r = $script:rows[0]
+        $r.HighPrivilegeApplication | Should -Match 'Mail\.ReadWrite'
+        $r.HighPrivilegeDelegated   | Should -Match 'Mail\.Send'
+        $r.HighPrivilegeDelegated   | Should -Not -Match 'Calendars'
     }
 
-    It 'maps consent types and counts users without exposing IDs' {
-        $admin = @($script:rows | Where-Object { $_.PermissionType -eq 'Delegated' -and $_.ConsentType -eq 'Admin' })
-        $admin.Count | Should -Be 2   # User.Read + Mail.Send from the AllPrincipals grant
-        $admin[0].ConsentedUserCount | Should -Be ''
-        $user = @($script:rows | Where-Object { $_.Permission -eq 'Calendars.Read' })
-        $user.Count | Should -Be 2    # one row per principal grant
-        $user[0].ConsentType | Should -Be 'User'
-        $user[0].ConsentedUserCount | Should -Be 2   # user-a + user-b
-        ($script:rows | ConvertTo-Json) | Should -Not -Match 'user-[ab]'
+    It 'keeps unresolved appRoleIds in UnresolvedPermissions' {
+        $script:rows[0].UnresolvedPermissions | Should -Be 'role-unresolved'
+    }
+}
+
+Describe 'ConvertTo-AppDelegatedUserRows' {
+    BeforeAll {
+        $script:userMap = @{
+            'user-a' = @{ UserPrincipalName = 'anna@contoso.com'; DisplayName = 'Anna' }
+            'user-b' = @{ UserPrincipalName = 'bob@contoso.com';  DisplayName = 'Bob' }
+            # user-c deliberately absent -> deleted/unresolved
+        }
+        $script:urows = @(ConvertTo-AppDelegatedUserRows -ClientServicePrincipals $script:clients `
+            -PermissionGrants $script:grants -ResourceServicePrincipals $script:resources `
+            -UsersById $script:userMap)
+    }
+
+    It 'emits one admin row + one row per consenting user per app+resource' {
+        $script:urows.Count | Should -Be 4   # 1 'All users' + user-a/b/c
+        @($script:urows | Where-Object { $_.UserPrincipalName -eq 'All users (admin consent)' }).Count | Should -Be 1
+        @($script:urows | Where-Object { "$($_.UserId)" }).Count | Should -Be 3
+    }
+
+    It 'gives each user only their own scopes' {
+        ($script:urows | Where-Object UserId -eq 'user-a').DelegatedPermissions | Should -Be 'Calendars.Read; Mail.Send'
+        ($script:urows | Where-Object UserId -eq 'user-b').DelegatedPermissions | Should -Be 'Calendars.Read'
+        ($script:urows | Where-Object UserId -eq 'user-c').DelegatedPermissions | Should -Be 'Calendars.Read; Files.Read'
+        ($script:urows | Where-Object { $_.UserPrincipalName -eq 'All users (admin consent)' }).DelegatedPermissions |
+            Should -Be 'Mail.Send; User.Read'
+    }
+
+    It 'resolves UPNs and uses a placeholder for deleted users' {
+        ($script:urows | Where-Object UserId -eq 'user-a').UserPrincipalName | Should -Be 'anna@contoso.com'
+        ($script:urows | Where-Object UserId -eq 'user-c').UserPrincipalName | Should -Be '(deleted or unresolved user)'
+        ($script:urows | Where-Object UserId -eq 'user-c').UserId | Should -Be 'user-c'
+    }
+}
+
+Describe 'Resolve-GraphUsersById' {
+    It 'chunks getByIds at 1000 ids per POST' {
+        $script:callCount = 0
+        Mock Invoke-MgGraphRequest {
+            param($Method, $Uri, $Body, $ContentType, $OutputType, $ErrorAction)
+            $script:callCount++
+            $ids = ($Body | ConvertFrom-Json).ids
+            [pscustomobject]@{ value = @($ids | ForEach-Object {
+                [pscustomobject]@{ id = $_; userPrincipalName = "$_`@contoso.com"; displayName = "U $_" }
+            }) }
+        }
+        $map = Resolve-GraphUsersById -PrincipalIds @(1..1500 | ForEach-Object { "user-$_" })
+        $script:callCount | Should -Be 2
+        $map.Count | Should -Be 1500
+        $map['user-42'].UserPrincipalName | Should -Be 'user-42@contoso.com'
     }
 }
 

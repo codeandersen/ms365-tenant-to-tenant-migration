@@ -946,25 +946,60 @@ $null = $r.AppendLine('')
 
 # Enterprise app permissions (AppPermissions.csv from the Apps inventory section)
 if (Test-CsvPresent 'AppPermissions.csv') {
-    $highPriv        = @($appPerms | Where-Object { $_.IsHighPrivilege -eq 'True' })
-    $appsWithAppPerm = @($appPerms | Where-Object { $_.PermissionType -eq 'Application' } | ForEach-Object ClientServicePrincipalId | Sort-Object -Unique)
-    $appsWithDelPerm = @($appPerms | Where-Object { $_.PermissionType -eq 'Delegated' }   | ForEach-Object ClientServicePrincipalId | Sort-Object -Unique)
-    $unresolved      = @($appPerms | Where-Object { $_.Resolved -eq 'False' })
+    $oldPermFormat = $appPerms.Count -gt 0 -and ($appPerms[0].PSObject.Properties.Name -contains 'PermissionType')
+    if ($oldPermFormat) {
+        # Legacy long format: one row per grant (PermissionType/Permission/ConsentType)
+        $highPriv        = @($appPerms | Where-Object { $_.IsHighPrivilege -eq 'True' })
+        $appsWithAppPerm = @($appPerms | Where-Object { $_.PermissionType -eq 'Application' } | ForEach-Object ClientServicePrincipalId | Sort-Object -Unique)
+        $appsWithDelPerm = @($appPerms | Where-Object { $_.PermissionType -eq 'Delegated' }   | ForEach-Object ClientServicePrincipalId | Sort-Object -Unique)
+        $unresolved      = @($appPerms | Where-Object { $_.Resolved -eq 'False' })
+        $hpPermByApp     = @{}
+        foreach ($hp in $highPriv) {
+            $k = "$($hp.ClientAppId)"
+            if (-not $hpPermByApp.Contains($k)) { $hpPermByApp[$k] = [System.Collections.Generic.List[string]]::new() }
+            $hpPermByApp[$k].Add("$($hp.PermissionType): $($hp.Permission)")
+        }
+        $unresolvedCount = $unresolved.Count
+    } else {
+        # Wide format: one row per app+resource, permission columns joined '; '
+        $hasApp = @($appPerms | Where-Object { "$($_.ApplicationPermissions)".Trim() })
+        $hasDel = @($appPerms | Where-Object { "$($_.DelegatedPermissionsAdminConsent)".Trim() -or "$($_.DelegatedPermissionsUserConsent)".Trim() })
+        $appsWithAppPerm = @($hasApp | ForEach-Object ClientServicePrincipalId | Sort-Object -Unique)
+        $appsWithDelPerm = @($hasDel | ForEach-Object ClientServicePrincipalId | Sort-Object -Unique)
+        $unresolvedCount = @($appPerms | Where-Object { "$($_.UnresolvedPermissions)".Trim() }).Count
+        $hpPermByApp     = @{}
+        foreach ($r0 in $appPerms) {
+            $perms = @()
+            $perms += @("$($r0.HighPrivilegeApplication)" -split '; ' | Where-Object { $_ } | ForEach-Object { "Application: $_" })
+            $perms += @("$($r0.HighPrivilegeDelegated)"   -split '; ' | Where-Object { $_ } | ForEach-Object { "Delegated: $_" })
+            if ($perms.Count -eq 0) { continue }
+            $k = "$($r0.ClientAppId)"
+            if (-not $hpPermByApp.Contains($k)) { $hpPermByApp[$k] = [System.Collections.Generic.List[string]]::new() }
+            foreach ($p in $perms) { $hpPermByApp[$k].Add($p) }
+        }
+    }
     $null = $r.AppendLine('### Enterprise app API permissions')
     $null = $r.AppendLine('')
     $null = $r.AppendLine("- **$($appsWithAppPerm.Count)** enterprise apps have application permissions, **$($appsWithDelPerm.Count)** have delegated grants - every consent must be re-created in the target tenant.")
-    if ($unresolved.Count -gt 0) {
-        $null = $r.AppendLine("- $($unresolved.Count) grant(s) could not be resolved to a permission name (the role GUID is listed) - look them up before rebuilding.")
+    if ($unresolvedCount -gt 0) {
+        $null = $r.AppendLine("- $unresolvedCount grant(s) could not be resolved to a permission name (the role GUID is listed) - look them up before rebuilding.")
     }
-    if ($highPriv.Count -gt 0) {
+    $dupPerms = Import-AttCsv 'AppDelegatedUserPermissions.csv'
+    if ($dupPerms.Count -gt 0) {
+        $dupUsers = @($dupPerms | Where-Object { "$($_.UserId)" } | ForEach-Object UserId | Sort-Object -Unique).Count
+        $dupApps  = @($dupPerms | Where-Object { "$($_.UserId)" } | ForEach-Object ClientServicePrincipalId | Sort-Object -Unique).Count
+        $null = $r.AppendLine("- $dupUsers user(s) have user-consented delegated grants across $dupApps app(s) - see AppDelegatedUserPermissions.csv.")
+    }
+    if ($hpPermByApp.Count -gt 0) {
         $statusByApp = @{}
         foreach ($s in $appSignIns) { $statusByApp["$($s.AppId)"] = "$($s.Status)" }
-        $hpRows = @($highPriv | Group-Object ClientAppId | ForEach-Object {
-            $g = $_.Group[0]
+        $nameByApp = @{}
+        foreach ($r0 in $appPerms) { $nameByApp["$($r0.ClientAppId)"] = "$($r0.ClientDisplayName)" }
+        $hpRows = @($hpPermByApp.Keys | ForEach-Object {
             [pscustomobject]@{
-                App          = $g.ClientDisplayName
-                Permissions  = (@($_.Group | ForEach-Object { "$($_.PermissionType): $($_.Permission)" }) | Sort-Object -Unique) -join '; '
-                SignInStatus = $statusByApp["$($g.ClientAppId)"]
+                App          = $nameByApp[$_]
+                Permissions  = (@($hpPermByApp[$_]) | Sort-Object -Unique) -join '; '
+                SignInStatus = $statusByApp[$_]
             }
         } | Sort-Object App)
         $null = $r.AppendLine("- **$($hpRows.Count) app(s) hold high-privilege grants** (broad access - review each before re-consenting):")

@@ -102,7 +102,13 @@
            DelegatedPermissions=@('Application.Read.All','Directory.Read.All'); ApplicationPermissions=@('Application.Read.All','Directory.Read.All');
            AdminRoles=@('Global Reader'); AppOnlySupported=$true; RequiredLicence=''; Coverage='Full';
            DocsUrl='https://learn.microsoft.com/en-us/graph/api/serviceprincipal-list-approleassignments'; ValidationStatus='NotValidatedLive';
-           KnownLimitations='Resource names resolved via one extra call per resource service principal' }
+           KnownLimitations='One row per app+resource; resource names resolved via one extra call per resource service principal' }
+        @{ Name='AppDelegatedUserPermissions'; Section='Apps'; ServiceGroup='Graph'; Level='Advanced'; Workstream='Security'; Workload='App permissions';
+           Output='AppDelegatedUserPermissions.csv'; Endpoint='GET /oauth2PermissionGrants + POST /directoryObjects/getByIds'; ApiVersion='v1.0';
+           DelegatedPermissions=@('Directory.Read.All'); ApplicationPermissions=@('Directory.Read.All');
+           AdminRoles=@('Global Reader'); AppOnlySupported=$true; RequiredLicence=''; Coverage='Full';
+           DocsUrl='https://learn.microsoft.com/en-us/graph/api/directoryobject-getbyids'; ValidationStatus='NotValidatedLive';
+           KnownLimitations='Contains user UPNs - personal data; unresolved principalIds shown as (deleted or unresolved user)' }
         @{ Name='AppRegistrationPermissions'; Section='Apps'; ServiceGroup='Graph'; Level='Basic'; Workstream='Security'; Workload='App permissions';
            Output='AppRegistrationPermissions.csv'; Endpoint='requiredResourceAccess on GET /applications'; ApiVersion='v1.0';
            DelegatedPermissions=@('Application.Read.All'); ApplicationPermissions=@('Application.Read.All');

@@ -250,4 +250,23 @@ Describe 'New-MigrationReadinessReport' {
         $script:Md | Should -Match 'Mimecast'
         $script:Md | Should -Match 'Dynamic distribution groups'
     }
+
+    It 'mentions per-user delegated grants from AppDelegatedUserPermissions.csv' {
+        $script:Md | Should -Match 'user-consented delegated grants'
+        $script:Md | Should -Match 'AppDelegatedUserPermissions\.csv'
+    }
+
+    It 'still renders the legacy long AppPermissions.csv format' {
+        $old = @(
+            'ClientDisplayName,ClientAppId,ClientServicePrincipalId,PermissionType,Resource,ResourceServicePrincipalId,Permission,ConsentType,ConsentedUserCount,IsHighPrivilege,Resolved'
+            'Contoso CRM,app1,sp1,Application,Microsoft Graph,rsp1,Mail.ReadWrite,Admin,,True,True'
+            'Contoso CRM,app1,sp1,Delegated,Microsoft Graph,rsp1,User.Read,Admin,,False,True'
+        )
+        Set-Content (Join-Path $script:Inv 'attachments\AppPermissions.csv') $old -Encoding UTF8
+        & $script:Report -InventoryPath $script:Inv -OutFile (Join-Path $script:Inv 'R8.md')
+        $m = [System.IO.File]::ReadAllText((Join-Path $script:Inv 'R8.md'), [System.Text.Encoding]::UTF8)
+        $m | Should -Match 'Enterprise app API permissions'
+        $m | Should -Match 'Contoso CRM'
+        $m | Should -Match 'Application: Mail\.ReadWrite'
+    }
 }

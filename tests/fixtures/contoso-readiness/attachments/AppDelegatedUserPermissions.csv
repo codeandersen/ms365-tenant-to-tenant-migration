@@ -1,0 +1,3 @@
+ClientDisplayName,ClientAppId,ClientServicePrincipalId,Resource,ResourceServicePrincipalId,UserPrincipalName,UserDisplayName,UserId,DelegatedPermissions,HighPrivilegeDelegated
+Contoso Sync Tool,app3,sp3,Microsoft Graph,rsp1,soren@contoso.com,Soren,aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee,Mail.Send,Mail.Send
+Contoso Sync Tool,app3,sp3,Microsoft Graph,rsp1,anna@contoso.com,Anna,00000000-0000-0000-0000-000000000000,Mail.Send,Mail.Send

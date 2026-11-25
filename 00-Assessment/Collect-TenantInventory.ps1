@@ -1921,14 +1921,15 @@ function Test-HighPrivilegePermission {
     return $false
 }
 
-function ConvertTo-AppPermissionRows {
-    # Pure: flatten granted API permissions to one row per grant.
-    # - Application grants: servicePrincipal/{id}/appRoleAssignments -> resource name
-    #   + appRole value, resolved via ResourceServicePrincipals (unresolvable
-    #   appRoleId -> Permission = the GUID, Resolved = False).
-    # - Delegated grants: oauth2PermissionGrants -> one row per scope token.
-    #   consentType AllPrincipals = 'Admin', Principal = 'User' with
-    #   ConsentedUserCount = number of distinct principalIds (never the IDs).
+function ConvertTo-AppPermissionSummaryRows {
+    # Pure: granted API permissions, ONE ROW PER enterprise app + resource.
+    # - ApplicationPermissions: from servicePrincipal/{id}/appRoleAssignments,
+    #   resolved via ResourceServicePrincipals ('(member)' for the zero role id,
+    #   the GUID for unresolvable ids - also listed in UnresolvedPermissions).
+    # - DelegatedPermissionsAdminConsent / DelegatedPermissionsUserConsent:
+    #   distinct scope tokens from AllPrincipals / Principal grants.
+    # - UserConsentCount: distinct principalIds with Principal grants for the
+    #   app+resource pair (never the IDs themselves).
     param(
         [object[]]$ClientServicePrincipals,
         [hashtable]$RoleAssignmentsByClientId,
@@ -1938,54 +1939,147 @@ function ConvertTo-AppPermissionRows {
     $zeroId = '00000000-0000-0000-0000-000000000000'
     $rows = [System.Collections.Generic.List[object]]::new()
     foreach ($sp in $ClientServicePrincipals) {
+        # Application permissions per resource
+        $appPermsByRes = [ordered]@{}
+        $unresolvedByRes = @{}
         foreach ($a in @($RoleAssignmentsByClientId["$($sp.id)"])) {
-            $res      = $ResourceServicePrincipals["$($a.resourceId)"]
-            $perm     = $null
-            $resolved = $false
+            $rid = "$($a.resourceId)"
+            $res = $ResourceServicePrincipals[$rid]
+            if (-not $appPermsByRes.Contains($rid)) { $appPermsByRes[$rid] = [System.Collections.Generic.List[string]]::new() }
             if ("$($a.appRoleId)" -eq $zeroId) {
-                $perm = '(member)'; $resolved = $true
+                $appPermsByRes[$rid].Add('(member)')
             } elseif ($res -and $res.Roles.Contains("$($a.appRoleId)")) {
-                $perm = $res.Roles["$($a.appRoleId)"]; $resolved = $true
+                $appPermsByRes[$rid].Add($res.Roles["$($a.appRoleId)"])
+            } else {
+                $appPermsByRes[$rid].Add("$($a.appRoleId)")
+                if (-not $unresolvedByRes.Contains($rid)) { $unresolvedByRes[$rid] = [System.Collections.Generic.List[string]]::new() }
+                $unresolvedByRes[$rid].Add("$($a.appRoleId)")
             }
-            if (-not $perm) { $perm = "$($a.appRoleId)" }
+        }
+        # Delegated grants per resource, split by consent type
+        $adminScopesByRes = @{}; $userScopesByRes = @{}; $principalsByRes = @{}
+        foreach ($g in @($PermissionGrants | Where-Object { "$($_.clientId)" -eq "$($sp.id)" })) {
+            $rid = "$($g.resourceId)"
+            $tokens = @("$($g.scope)" -split '\s+' | Where-Object { $_ })
+            if ("$($g.consentType)" -eq 'AllPrincipals') {
+                if (-not $adminScopesByRes.Contains($rid)) { $adminScopesByRes[$rid] = [System.Collections.Generic.List[string]]::new() }
+                foreach ($t in $tokens) { $adminScopesByRes[$rid].Add($t) }
+            } else {
+                if (-not $userScopesByRes.Contains($rid)) { $userScopesByRes[$rid] = [System.Collections.Generic.List[string]]::new() }
+                foreach ($t in $tokens) { $userScopesByRes[$rid].Add($t) }
+                if (-not $principalsByRes.Contains($rid)) { $principalsByRes[$rid] = @{} }
+                if ("$($g.principalId)") { $principalsByRes[$rid]["$($g.principalId)"] = $true }
+            }
+        }
+        foreach ($rid in @($appPermsByRes.Keys + $adminScopesByRes.Keys + $userScopesByRes.Keys | Sort-Object -Unique)) {
+            $res   = $ResourceServicePrincipals[$rid]
+            $appP  = @($appPermsByRes[$rid] | Sort-Object -Unique)
+            $admP  = @($adminScopesByRes[$rid] | Sort-Object -Unique)
+            $usrP  = @($userScopesByRes[$rid] | Sort-Object -Unique)
             $rows.Add([pscustomobject]@{
+                ClientDisplayName                 = $sp.displayName
+                ClientAppId                       = $sp.appId
+                ClientServicePrincipalId          = $sp.id
+                Resource                          = if ($res) { $res.DisplayName } else { '' }
+                ResourceServicePrincipalId        = $rid
+                ApplicationPermissions            = ($appP -join '; ')
+                DelegatedPermissionsAdminConsent  = ($admP -join '; ')
+                DelegatedPermissionsUserConsent   = ($usrP -join '; ')
+                UserConsentCount                  = @($principalsByRes[$rid].Keys).Count
+                HighPrivilegeApplication          = (@($appP | Where-Object { Test-HighPrivilegePermission -Permission $_ }) -join '; ')
+                HighPrivilegeDelegated            = (@(@($admP) + @($usrP) | Sort-Object -Unique | Where-Object { Test-HighPrivilegePermission -Permission $_ }) -join '; ')
+                UnresolvedPermissions             = (@($unresolvedByRes[$rid] | Sort-Object -Unique) -join '; ')
+            })
+        }
+    }
+    return $rows
+}
+
+function Resolve-GraphUsersById {
+    # Resolves principalIds to users in bulk via POST directoryObjects/getByIds
+    # (max 1000 ids per call, Directory.Read.All). Returns id -> @{UPN;DisplayName}.
+    # https://learn.microsoft.com/en-us/graph/api/directoryobject-getbyids
+    param([object[]]$PrincipalIds)
+    $userMap = @{}
+    $ids = @($PrincipalIds | Where-Object { "$_" } | ForEach-Object { "$_" } | Sort-Object -Unique)
+    for ($ci = 0; $ci -lt $ids.Count; $ci += 1000) {
+        $chunk = @($ids[$ci..([math]::Min($ci + 999, $ids.Count - 1))])
+        try {
+            $resp = Invoke-MgGraphRequest -Method POST -Uri 'https://graph.microsoft.com/v1.0/directoryObjects/getByIds' `
+                -Body (@{ ids = $chunk; types = @('user') } | ConvertTo-Json) -ContentType 'application/json' `
+                -OutputType PSObject -ErrorAction Stop
+            foreach ($u in @($resp.value)) {
+                $userMap["$($u.id)"] = @{ UserPrincipalName = "$($u.userPrincipalName)"; DisplayName = "$($u.displayName)" }
+            }
+        } catch {
+            if (Test-GraphForbidden $_) { throw }
+            Write-Log "directoryObjects/getByIds chunk at $ci failed: $($_.Exception.Message)" -Level WARN
+        }
+    }
+    return $userMap
+}
+
+function ConvertTo-AppDelegatedUserRows {
+    # Pure: ONE ROW PER enterprise app + resource + consenting user (Principal
+    # grants only; scopes from all that user's grants for the pair merged),
+    # plus one 'All users (admin consent)' row per app+resource with
+    # AllPrincipals grants - so the file answers "who has what" completely.
+    # UsersById: principalId -> @{ UserPrincipalName; DisplayName }; unresolved
+    # ids get '(deleted or unresolved user)'.
+    param(
+        [object[]]$ClientServicePrincipals,
+        [object[]]$PermissionGrants,
+        [hashtable]$ResourceServicePrincipals,
+        [hashtable]$UsersById
+    )
+    $rows = [System.Collections.Generic.List[object]]::new()
+    foreach ($sp in $ClientServicePrincipals) {
+        $adminByRes = @{}; $userByRes = @{}
+        foreach ($g in @($PermissionGrants | Where-Object { "$($_.clientId)" -eq "$($sp.id)" })) {
+            $rid = "$($g.resourceId)"
+            $tokens = @("$($g.scope)" -split '\s+' | Where-Object { $_ })
+            if ("$($g.consentType)" -eq 'AllPrincipals') {
+                if (-not $adminByRes.Contains($rid)) { $adminByRes[$rid] = [System.Collections.Generic.List[string]]::new() }
+                foreach ($t in $tokens) { $adminByRes[$rid].Add($t) }
+            } else {
+                $pid2 = "$($g.principalId)"
+                if (-not $pid2) { continue }
+                if (-not $userByRes.Contains($rid)) { $userByRes[$rid] = @{} }
+                if (-not $userByRes[$rid].Contains($pid2)) { $userByRes[$rid][$pid2] = [System.Collections.Generic.List[string]]::new() }
+                foreach ($t in $tokens) { $userByRes[$rid][$pid2].Add($t) }
+            }
+        }
+        foreach ($rid in @($adminByRes.Keys + $userByRes.Keys | Sort-Object -Unique)) {
+            $res = $ResourceServicePrincipals[$rid]
+            $base = @{
                 ClientDisplayName          = $sp.displayName
                 ClientAppId                = $sp.appId
                 ClientServicePrincipalId   = $sp.id
-                PermissionType             = 'Application'
                 Resource                   = if ($res) { $res.DisplayName } else { '' }
-                ResourceServicePrincipalId = "$($a.resourceId)"
-                Permission                 = $perm
-                ConsentType                = 'Admin'
-                ConsentedUserCount         = ''
-                IsHighPrivilege            = Test-HighPrivilegePermission -Permission $perm
-                Resolved                   = $resolved
-            })
-        }
-        $clientGrants = @($PermissionGrants | Where-Object { "$($_.clientId)" -eq "$($sp.id)" })
-        foreach ($g in $clientGrants) {
-            $res     = $ResourceServicePrincipals["$($g.resourceId)"]
-            $isAdmin = "$($g.consentType)" -eq 'AllPrincipals'
-            foreach ($sc in ("$($g.scope)" -split '\s+' | Where-Object { $_ })) {
-                $userCount = ''
-                if (-not $isAdmin) {
-                    $userCount = @($clientGrants |
-                        Where-Object { "$($_.resourceId)" -eq "$($g.resourceId)" -and ("$($_.scope)" -split '\s+') -contains $sc } |
-                        ForEach-Object { "$($_.principalId)" } | Sort-Object -Unique).Count
+                ResourceServicePrincipalId = $rid
+            }
+            if ($adminByRes.Contains($rid)) {
+                $admP = @($adminByRes[$rid] | Sort-Object -Unique)
+                $rows.Add([pscustomobject]($base + @{
+                    UserPrincipalName     = 'All users (admin consent)'
+                    UserDisplayName       = ''
+                    UserId                = ''
+                    DelegatedPermissions  = ($admP -join '; ')
+                    HighPrivilegeDelegated= (@($admP | Where-Object { Test-HighPrivilegePermission -Permission $_ }) -join '; ')
+                }))
+            }
+            if ($userByRes.Contains($rid)) {
+                foreach ($pid2 in @($userByRes[$rid].Keys | Sort-Object)) {
+                    $u   = $UsersById[$pid2]
+                    $usrP = @($userByRes[$rid][$pid2] | Sort-Object -Unique)
+                    $rows.Add([pscustomobject]($base + @{
+                        UserPrincipalName     = if ($u -and $u.UserPrincipalName) { $u.UserPrincipalName } else { '(deleted or unresolved user)' }
+                        UserDisplayName       = if ($u) { "$($u.DisplayName)" } else { '' }
+                        UserId                = $pid2
+                        DelegatedPermissions  = ($usrP -join '; ')
+                        HighPrivilegeDelegated= (@($usrP | Where-Object { Test-HighPrivilegePermission -Permission $_ }) -join '; ')
+                    }))
                 }
-                $rows.Add([pscustomobject]@{
-                    ClientDisplayName          = $sp.displayName
-                    ClientAppId                = $sp.appId
-                    ClientServicePrincipalId   = $sp.id
-                    PermissionType             = 'Delegated'
-                    Resource                   = if ($res) { $res.DisplayName } else { '' }
-                    ResourceServicePrincipalId = "$($g.resourceId)"
-                    Permission                 = $sc
-                    ConsentType                = if ($isAdmin) { 'Admin' } else { 'User' }
-                    ConsentedUserCount         = $userCount
-                    IsHighPrivilege            = Test-HighPrivilegePermission -Permission $sc
-                    Resolved                   = $true
-                })
             }
         }
     }
@@ -2099,22 +2193,45 @@ function Invoke-Apps {
             $resourceMap[$rid] = @{ DisplayName = ''; AppId = ''; Roles = @{}; Scopes = @{} }
         }
     }
-    $script:AppPermRows = @(ConvertTo-AppPermissionRows -ClientServicePrincipals ($nonMsSps | ForEach-Object {
-            [pscustomobject]@{ id = "$($_.id)"; appId = "$($_.appId)"; displayName = "$($_.displayName)" } }) `
+    $clientList = @($nonMsSps | ForEach-Object {
+            [pscustomobject]@{ id = "$($_.id)"; appId = "$($_.appId)"; displayName = "$($_.displayName)" } })
+    $script:AppPermRows = @(ConvertTo-AppPermissionSummaryRows -ClientServicePrincipals $clientList `
         -RoleAssignmentsByClientId $assignMap -PermissionGrants $grants -ResourceServicePrincipals $resourceMap)
     Export-CsvSafe -Data $script:AppPermRows -Name 'AppPermissions.csv'
     $script:AppPermResourceMap = $resourceMap
+
+    # Per-user delegated grants: resolve principalIds in bulk (getByIds accepts
+    # up to 1000 ids per POST, Directory.Read.All - already consented).
+    # https://learn.microsoft.com/en-us/graph/api/directoryobject-getbyids
+    Invoke-Collector -Name 'AppDelegatedUserPermissions' -ScriptBlock {
+    $principalIds = @($grants | Where-Object { "$($_.consentType)" -ne 'AllPrincipals' -and "$($_.principalId)" } |
+        ForEach-Object { "$($_.principalId)" } | Sort-Object -Unique)
+    $userMap = Resolve-GraphUsersById -PrincipalIds $principalIds
+    $script:Summary.metrics.appDelegatedUserGrantCount = $principalIds.Count
+    $dupRows = @(ConvertTo-AppDelegatedUserRows -ClientServicePrincipals $clientList `
+        -PermissionGrants $grants -ResourceServicePrincipals $resourceMap -UsersById $userMap |
+        Select-Object ClientDisplayName, ClientAppId, ClientServicePrincipalId, Resource, ResourceServicePrincipalId,
+                      UserPrincipalName, UserDisplayName, UserId, DelegatedPermissions, HighPrivilegeDelegated)
+    Export-CsvSafe -Data $dupRows -Name 'AppDelegatedUserPermissions.csv'
+    }
     }
     $permRows = @($script:AppPermRows)
     $resourceMap = if ($script:AppPermResourceMap) { $script:AppPermResourceMap } else { @{} }
     $appPermBySp = @{}; $delPermBySp = @{}; $highPermBySp = @{}
     foreach ($r in $permRows) {
         $sid = $r.ClientServicePrincipalId
-        if ($r.PermissionType -eq 'Application') { $appPermBySp[$sid] = [int]$appPermBySp[$sid] + 1 }
-        else                                     { $delPermBySp[$sid] = [int]$delPermBySp[$sid] + 1 }
-        if ($r.IsHighPrivilege) {
+        $appCount = @("$($r.ApplicationPermissions)" -split '; ' | Where-Object { $_ }).Count
+        $delCount = @("$($r.DelegatedPermissionsAdminConsent)" -split '; ' | Where-Object { $_ }) +
+                    @("$($r.DelegatedPermissionsUserConsent)" -split '; ' | Where-Object { $_ }) | Sort-Object -Unique
+        if ($appCount -gt 0) { $appPermBySp[$sid] = [int]$appPermBySp[$sid] + $appCount }
+        if (@($delCount).Count -gt 0) { $delPermBySp[$sid] = [int]$delPermBySp[$sid] + @($delCount).Count }
+        foreach ($hp in @("$($r.HighPrivilegeApplication)" -split '; ' | Where-Object { $_ })) {
             if (-not $highPermBySp[$sid]) { $highPermBySp[$sid] = [System.Collections.Generic.List[string]]::new() }
-            $highPermBySp[$sid].Add("$($r.PermissionType): $($r.Permission)")
+            $highPermBySp[$sid].Add("Application: $hp")
+        }
+        foreach ($hp in @("$($r.HighPrivilegeDelegated)" -split '; ' | Where-Object { $_ })) {
+            if (-not $highPermBySp[$sid]) { $highPermBySp[$sid] = [System.Collections.Generic.List[string]]::new() }
+            $highPermBySp[$sid].Add("Delegated: $hp")
         }
     }
 
