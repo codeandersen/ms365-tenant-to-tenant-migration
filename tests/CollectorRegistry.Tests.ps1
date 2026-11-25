@@ -2,7 +2,12 @@ BeforeAll {
     $script:RegPath   = Join-Path $PSScriptRoot '..\00-Assessment\Collectors.psd1'
     $script:CollFile  = Join-Path $PSScriptRoot '..\00-Assessment\Collect-TenantInventory.ps1'
     $script:MatrixDoc = Join-Path $PSScriptRoot '..\docs\Collector-Matrix.md'
-    $script:Reg       = (Import-PowerShellDataFile $script:RegPath).Collectors
+    $script:RegData   = Import-PowerShellDataFile $script:RegPath
+    $script:Reg       = @($script:RegData.Collectors)
+    # Import-PowerShellDataFile caps a data file at 132 objects - phase-1 entries
+    # live in a separate file
+    $regP1Path = Join-Path (Split-Path $script:RegPath -Parent) 'Collectors.Phase1.psd1'
+    if (Test-Path $regP1Path) { $script:Reg += @((Import-PowerShellDataFile $regP1Path).Collectors) }
 
     # Literal CSV names in Export-CsvSafe calls (dynamic names can't be read statically)
     $ast = [System.Management.Automation.Language.Parser]::ParseFile(

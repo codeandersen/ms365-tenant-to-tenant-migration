@@ -6,7 +6,7 @@ BeforeAll {
         $script:Collector, [ref]$null, [ref]$null)
     $names = @('Test-GraphSession','Invoke-OneDrive','Invoke-SharePoint',
                'Invoke-OneDriveFallback','Invoke-SharePointFallback',
-               'ConvertFrom-OneDriveUsageReport','ConvertFrom-SharePointUsageReport')
+               'ConvertFrom-OneDriveUsageReport','ConvertFrom-SharePointUsageReport','Get-SiteType')
     $defs = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true) |
         Where-Object { $names -contains $_.Name }
     foreach ($d in $defs) { . ([ScriptBlock]::Create($d.Extent.Text)) }

@@ -98,6 +98,59 @@ Generated from `00-Assessment/Collectors.psd1` by `tools/New-CollectorMatrix.ps1
 | Collaboration | Viva Glint | VivaGlint | Basic | - | - | ManualDiscoveryRequired | No | - | Ask the customer; service-plan indicator only | https://learn.microsoft.com/en-us/viva/glint/ | NotValidatedLive |
 | Collaboration | Viva Pulse | VivaPulse | Basic | - | - | ManualDiscoveryRequired | No | - | Ask the customer; service-plan indicator only | https://learn.microsoft.com/en-us/viva/pulse/ | NotValidatedLive |
 | Collaboration | Viva Amplify | VivaAmplify | Basic | - | - | ManualDiscoveryRequired | No | - | Ask the customer; service-plan indicator only | https://learn.microsoft.com/en-us/viva/amplify/ | NotValidatedLive |
+| Governance | Entra ID policies | AuthorizationPolicy | Basic | GET /policies/authorizationPolicy | v1.0 | Full | Yes | - | - | https://learn.microsoft.com/en-us/graph/api/authorizationpolicy-get | NotValidatedLive |
+| Governance | Entra ID policies | AdminConsentRequestPolicy | Basic | GET /policies/adminConsentRequestPolicy | v1.0 | Full | Yes | - | - | https://learn.microsoft.com/en-us/graph/api/adminconsentrequestpolicy-get | NotValidatedLive |
+| Governance | Entra ID policies | GroupSettings | Basic | GET /groupSettings | v1.0 | Full | Yes | - | - | https://learn.microsoft.com/en-us/graph/api/groupsetting-list | NotValidatedLive |
+| Governance | Groups | GroupLifecyclePolicies | Basic | GET /groupLifecyclePolicies | v1.0 | Full | Yes | - | - | https://learn.microsoft.com/en-us/graph/api/grouplifecyclepolicy-list | NotValidatedLive |
+| Security | Cross-tenant access | CrossTenantAccessPolicy | Basic | GET /policies/crossTenantAccessPolicy + /partners | v1.0 | Full | Yes | - | - | https://learn.microsoft.com/en-us/graph/api/crosstenantaccesspolicy-list-partners | NotValidatedLive |
+| Identity | Roles and admins | AdministrativeUnits | Basic | GET /directory/administrativeUnits + /members/$count | v1.0 | Full | Yes | - | - | https://learn.microsoft.com/en-us/graph/api/administrativeunit-list | NotValidatedLive |
+| Governance | Partner access (GDAP) | DelegatedAdminRelationships | Basic | GET /tenantRelationships/delegatedAdminRelationships | v1.0 | Full | Yes | - | - | https://learn.microsoft.com/en-us/graph/api/tenantrelationship-list-delegatedadminrelationships | NotValidatedLive |
+| Collaboration | Groups | GroupDetails | Advanced | GET /groups/{id}/members/$count + /owners | v1.0 | Partial | Yes | - | Per-group calls; owners capped at first page | https://learn.microsoft.com/en-us/graph/api/group-get-members | NotValidatedLive |
+| Security | Authentication | AuthStrengths | Basic | GET /policies/authenticationStrengthPolicies | v1.0 | Full | Yes | - | - | https://learn.microsoft.com/en-us/graph/api/authenticationstrengthpolicy-list | NotValidatedLive |
+| Identity | Roles and admins | CustomDirectoryRoles | Basic | GET /roleManagement/directory/roleDefinitions?$filter=isBuiltIn eq false | v1.0 | Full | Yes | - | - | https://learn.microsoft.com/en-us/graph/api/unifiedroledefinition-list | NotValidatedLive |
+| Security | PIM | PimAssignments | Basic | GET /roleManagement/directory/roleEligibilitySchedules + /roleAssignmentSchedules | v1.0 | Full | Yes | Entra ID P2 | Requires Entra ID P2 (AAD_PREMIUM_P2) | https://learn.microsoft.com/en-us/graph/api/rolemanagement-directory-list-roleeligibilityschedules | NotValidatedLive |
+| BusinessApps | Enterprise applications | AppOwners | Basic | GET /applications/{id}/owners | v1.0 | Full | Yes | - | One call per app registration | https://learn.microsoft.com/en-us/graph/api/application-list-owners | NotValidatedLive |
+| BusinessApps | App registrations | AppRedirectUris | Basic | GET /applications (web/spa/publicClient) | v1.0 | Full | Yes | - | - | https://learn.microsoft.com/en-us/graph/api/resources/application | NotValidatedLive |
+| Security | App credentials | AppCredentials | Basic | GET /applications + /servicePrincipals (keyCredentials/passwordCredentials) | v1.0 | Full | Yes | - | Metadata only - no secretText or key material | https://learn.microsoft.com/en-us/graph/api/resources/keycredential | NotValidatedLive |
+| Security | Enterprise applications | SamlCertificates | Basic | GET /servicePrincipals (keyCredentials, preferredSingleSignOnMode=saml) | v1.0 | Full | Yes | - | Metadata only | https://learn.microsoft.com/en-us/graph/api/resources/serviceprincipal | NotValidatedLive |
+| Identity | App provisioning (SCIM) | ProvisioningJobs | Advanced | GET /servicePrincipals/{id}/synchronization/jobs | v1.0 | Full | Yes | - | One call per enterprise app; 404 = no provisioning | https://learn.microsoft.com/en-us/graph/api/synchronization-synchronization-list-jobs | NotValidatedLive |
+| Messaging | Exchange Online | RecoverableItemsSize | Advanced | Get-EXOMailboxFolderStatistics -FolderScope RecoverableItems | PowerShell | Partial | Yes | - | Per-mailbox call; NOT included in totalMailboxGB | https://learn.microsoft.com/en-us/powershell/module/exchange/get-exomailboxfolderstatistics | NotValidatedLive |
+| Messaging | Exchange Online | SmtpClientAuth | Basic | Get-TransportConfig | PowerShell | Full | Yes | - | Org default only | https://learn.microsoft.com/en-us/exchange/clients-and-mobile-in-exchange-online/authenticated-client-smtp-submission | NotValidatedLive |
+| Messaging | Exchange Online | SmtpClientAuthPerMailbox | Advanced | Get-CASMailbox -ResultSize Unlimited | PowerShell | Partial | Yes | - | Only mailboxes with an explicit override are listed | https://learn.microsoft.com/en-us/powershell/module/exchange/get-casmailbox | NotValidatedLive |
+| Messaging | Exchange Online | InactiveMailboxes | Basic | Get-EXOMailbox -InactiveMailboxOnly | PowerShell | Full | Yes | - | Inactive mailboxes are not moved by cross-tenant migration tools | https://learn.microsoft.com/en-us/powershell/module/exchange/get-exomailbox | NotValidatedLive |
+| Messaging | Exchange Online | SoftDeletedMailboxes | Basic | Get-EXOMailbox -SoftDeletedMailbox | PowerShell | Full | Yes | - | - | https://learn.microsoft.com/en-us/powershell/module/exchange/get-exomailbox | NotValidatedLive |
+| Messaging | Groups | DynamicDistributionGroups | Basic | Get-DynamicDistributionGroup + Get-DynamicDistributionGroupMember | PowerShell | Full | Yes | - | Membership cannot be exported statically - filter must be recreated | https://learn.microsoft.com/en-us/powershell/module/exchange/get-dynamicdistributiongroup | NotValidatedLive |
+| Messaging | Groups | DistributionGroupMembers | Advanced | Get-DistributionGroupMember + Get-Recipient | PowerShell | Partial | Yes | - | Member counts + owners; full member lists only at -Level Deep | https://learn.microsoft.com/en-us/powershell/module/exchange/get-distributiongroupmember | NotValidatedLive |
+| Messaging | Resource mailboxes | CalendarProcessing | Basic | Get-CalendarProcessing | PowerShell | Full | Yes | - | Room and equipment mailboxes only | https://learn.microsoft.com/en-us/powershell/module/exchange/get-calendarprocessing | NotValidatedLive |
+| Messaging | Exchange Online | CalendarPermissions | Deep | Get-MailboxFolderPermission <guid>:\Calendar | PowerShell | Partial | Yes | - | One call per mailbox - expensive on large tenants | https://learn.microsoft.com/en-us/powershell/module/exchange/get-mailboxfolderpermission | NotValidatedLive |
+| Security | Exchange Online | InboxRuleForwarding | Deep | Get-InboxRule -Mailbox <guid> | PowerShell | Partial | Yes | - | Target domains + rule name only - no rule bodies or addresses | https://learn.microsoft.com/en-us/powershell/module/exchange/get-inboxrule | NotValidatedLive |
+| Messaging | Exchange Online | SharingPolicies | Basic | Get-SharingPolicy | PowerShell | Full | Yes | - | - | https://learn.microsoft.com/en-us/powershell/module/exchange/get-sharingpolicy | NotValidatedLive |
+| Messaging | Exchange Online | AddressLists | Basic | Get-AddressList + Get-GlobalAddressList + Get-AddressBookPolicy + Get-OfflineAddressBook | PowerShell | Full | Yes | - | - | https://learn.microsoft.com/en-us/powershell/module/exchange/get-addresslist | NotValidatedLive |
+| Compliance | Exchange MRM | MrmRetention | Basic | Get-RetentionPolicyTag + Get-RetentionPolicy | PowerShell | Full | Yes | - | Exchange MRM - distinct from Purview retention | https://learn.microsoft.com/en-us/powershell/module/exchange/get-retentionpolicytag | NotValidatedLive |
+| Compliance | Exchange MRM | MrmRetentionPolicies | Basic | Get-RetentionPolicy | PowerShell | Full | Yes | - | - | https://learn.microsoft.com/en-us/powershell/module/exchange/get-retentionpolicy | NotValidatedLive |
+| Security | Exchange Online | ApplicationAccessPolicies | Basic | Get-ApplicationAccessPolicy | PowerShell | Full | Yes | - | EWS application scoping - recreate in target | https://learn.microsoft.com/en-us/powershell/module/exchange/get-applicationaccesspolicy | NotValidatedLive |
+| Security | Exchange Online | ServicePrincipalRoleAssignments | Basic | Get-ServicePrincipal + Get-ManagementRoleAssignment | PowerShell | Full | Yes | - | - | https://learn.microsoft.com/en-us/powershell/module/exchange/get-serviceprincipal | NotValidatedLive |
+| Messaging | Exchange hybrid | HybridIndicators | Basic | Get-IntraOrganizationConnector + Get-HybridConfiguration | PowerShell | Partial | Yes | - | Indicates on-prem Exchange hybrid - migration must consider free/busy and mail routing | https://learn.microsoft.com/en-us/powershell/module/exchange/get-intraorganizationconnector | NotValidatedLive |
+| Collaboration | SharePoint Online | HubSites | Basic | Get-SPOHubSite | PowerShell | Full | No | - | Association via HubSiteId column on SharePointSites.csv | https://learn.microsoft.com/en-us/powershell/module/microsoft.online.sharepoint.powershell/get-spohubsite | NotValidatedLive |
+| Collaboration | SharePoint Online | SiteAdmins | Advanced | Get-SPOUser -Site <url> | PowerShell | Partial | No | - | One call per site - expensive on large tenants | https://learn.microsoft.com/en-us/powershell/module/microsoft.online.sharepoint.powershell/get-spouser | NotValidatedLive |
+| Collaboration | OneDrive | DeletedOneDrives | Basic | Get-SPODeletedSite -IncludeOnlyPersonalSite | PowerShell | Full | No | - | Soft-deleted personal sites within retention | https://learn.microsoft.com/en-us/powershell/module/microsoft.online.sharepoint.powershell/get-spodeletedsite | NotValidatedLive |
+| Collaboration | SharePoint Online | SiteLists | Deep | GET /sites/{id}/lists | v1.0 | Partial | Yes | - | Runs only when SharePoint executes in the Graph process (fallback mode) - needs Graph site IDs | https://learn.microsoft.com/en-us/graph/api/site-list-lists | NotValidatedLive |
+| Collaboration | SharePoint Online | SiteUniquePermissions | Deep | - | - | ManualDiscoveryRequired | No | - | Needs PnP/per-item REST calls - out of scope; assess per-site | https://learn.microsoft.com/en-us/sharepoint/unique-permissions-in-sharepoint-server | NotValidatedLive |
+| Collaboration | OneDrive | OneDriveKFM | Basic | - | - | ManualDiscoveryRequired | No | - | Known Folder Move is client-side - assess via device policies/user survey | https://learn.microsoft.com/en-us/sharepoint/redirect-known-folders | NotValidatedLive |
+| Messaging | Mail flow | ThirdPartyEvidence | Basic | Resolve-DnsName (MX/SPF) + Exchange connectors CSVs | PowerShell | Partial | Yes | - | Rows only on concrete record matches (Mimecast/Proofpoint/Hornetsecurity/Barracuda/CodeTwo/Exclaimer/external MX) | https://learn.microsoft.com/en-us/exchange/mail-flow-best-practices/use-connectors-to-configure-mail-flow/use-connectors-to-configure-mail-flow | NotValidatedLive |
+| Collaboration | Microsoft Teams | TeamsConfig | Basic | Get-CsTenantFederationConfiguration + Get-CsTeams*Configuration + Get-CsTeams*Policy | PowerShell | Partial | Yes | - | Policy inventory is names only | https://learn.microsoft.com/en-us/powershell/module/teams/ | NotValidatedLive |
+| Collaboration | Microsoft Teams | TeamsFederation | Basic | Get-CsTenantFederationConfiguration | PowerShell | Full | Yes | - | - | https://learn.microsoft.com/en-us/powershell/module/teams/get-cstenantfederationconfiguration | NotValidatedLive |
+| Collaboration | Microsoft Teams | TeamsGuestConfig | Basic | Get-CsTeamsClientConfiguration + Get-CsTeamsGuestMeetingConfiguration + Get-CsTeamsGuestMessagingConfiguration | PowerShell | Partial | Yes | - | - | https://learn.microsoft.com/en-us/powershell/module/teams/get-csteamsclientconfiguration | NotValidatedLive |
+| Collaboration | Microsoft Teams | TeamsPolicies | Basic | Get-CsTeamsMeetingPolicy/MessagingPolicy/AppSetupPolicy/AppPermissionPolicy/CallingPolicy/UpdatePolicy | PowerShell | Partial | Yes | - | Names only - no per-policy user counts | https://learn.microsoft.com/en-us/powershell/module/teams/get-csteamsmeetingpolicy | NotValidatedLive |
+| Collaboration | Microsoft Teams | TeamTabs | Deep | GET /teams/{id}/channels/{id}/tabs | v1.0 | ManualDiscoveryRequired | No | - | Per-channel tab listing needs one call per channel - too costly for inventory; assess during migration design | https://learn.microsoft.com/en-us/graph/api/channel-list-tabs | NotValidatedLive |
+| Collaboration | M365 apps usage | UsageM365Apps | Basic | GET /reports/getM365AppUserDetail(period='D30') | v1.0 | UsageDetectionOnly | Yes | - | - | https://learn.microsoft.com/en-us/graph/api/reportroot-getm365appuserdetail | NotValidatedLive |
+| Endpoint | Office activations | UsageOfficeActivations | Basic | GET /reports/getOffice365ActivationsUserDetail | v1.0 | UsageDetectionOnly | Yes | - | No period parameter | https://learn.microsoft.com/en-us/graph/api/reportroot-getoffice365activationsuserdetail | NotValidatedLive |
+| Collaboration | M365 Groups | UsageGroupsActivity | Basic | GET /reports/getOffice365GroupsActivityDetail(period='D30') | v1.0 | UsageDetectionOnly | Yes | - | - | https://learn.microsoft.com/en-us/graph/api/reportroot-getoffice365groupsactivitydetail | NotValidatedLive |
+| Collaboration | Viva Engage (Yammer) | UsageYammer | Basic | GET /reports/getYammerActivityUserDetail(period='D30') | v1.0 | UsageDetectionOnly | Yes | - | - | https://learn.microsoft.com/en-us/graph/api/reportroot-getyammeractivityuserdetail | NotValidatedLive |
+| Endpoint | Microsoft Teams | UsageTeamsDevices | Basic | GET /reports/getTeamsDeviceUsageUserDetail(period='D30') | v1.0 | UsageDetectionOnly | Yes | - | - | https://learn.microsoft.com/en-us/graph/api/reportroot-getteamsdeviceusageuserdetail | NotValidatedLive |
+| BusinessApps | Microsoft 365 Copilot | UsageCopilot | Basic | GET /reports/getMicrosoft365CopilotUsageUserDetail(period='D30') | beta | UsageDetectionOnly | Yes | - | beta endpoint only - no v1.0 equivalent at time of writing | https://learn.microsoft.com/en-us/graph/api/reportroot-getmicrosoft365copilotusageuserdetail | NotValidatedLive |
+| Collaboration | Usage (90 days) | UsageD90 | Advanced | GET /reports/get*(period='D90') | v1.0 | UsageDetectionOnly | Yes | - | Email/Teams/ActiveUsers/Groups reports | https://learn.microsoft.com/en-us/graph/api/resources/report | NotValidatedLive |
+| Collaboration | Usage (180 days) | UsageD180 | Advanced | GET /reports/get*(period='D180') | v1.0 | UsageDetectionOnly | Yes | - | Email/Teams/ActiveUsers/Groups reports | https://learn.microsoft.com/en-us/graph/api/resources/report | NotValidatedLive |
 
 ## Permissions matrix
 
@@ -195,13 +248,68 @@ Delegated permissions are consented interactively (`Connect-MgGraph -Scopes`). A
 | VivaGlint | - | - | - |
 | VivaPulse | - | - | - |
 | VivaAmplify | - | - | - |
+| AuthorizationPolicy | Policy.Read.All | Policy.Read.All | Global Reader |
+| AdminConsentRequestPolicy | Policy.Read.All | Policy.Read.All | Global Reader |
+| GroupSettings | Directory.Read.All | Directory.Read.All | Global Reader |
+| GroupLifecyclePolicies | Directory.Read.All | Directory.Read.All | Global Reader |
+| CrossTenantAccessPolicy | Policy.Read.All | Policy.Read.All | Global Reader |
+| AdministrativeUnits | AdministrativeUnit.Read.All | AdministrativeUnit.Read.All | Global Reader |
+| DelegatedAdminRelationships | DelegatedAdminRelationship.Read.All | DelegatedAdminRelationship.Read.All | Global Reader |
+| GroupDetails | Group.Read.All | Group.Read.All | Global Reader |
+| AuthStrengths | Policy.Read.All | Policy.Read.All | Global Reader |
+| CustomDirectoryRoles | RoleManagement.Read.Directory | RoleManagement.Read.Directory | Global Reader |
+| PimAssignments | RoleAssignmentSchedule.Read.Directory<br>RoleEligibilitySchedule.Read.Directory | RoleAssignmentSchedule.Read.Directory<br>RoleEligibilitySchedule.Read.Directory | Global Reader |
+| AppOwners | Application.Read.All | Application.Read.All | Global Reader |
+| AppRedirectUris | Application.Read.All | Application.Read.All | Global Reader |
+| AppCredentials | Application.Read.All | Application.Read.All | Global Reader |
+| SamlCertificates | Application.Read.All | Application.Read.All | Global Reader |
+| ProvisioningJobs | Synchronization.Read.All | Synchronization.Read.All | Global Reader |
+| RecoverableItemsSize | - | - | Exchange Recipient<br>Global Reader |
+| SmtpClientAuth | - | - | Exchange Recipient<br>Global Reader |
+| SmtpClientAuthPerMailbox | - | - | Exchange Recipient<br>Global Reader |
+| InactiveMailboxes | - | - | Exchange Recipient<br>Global Reader |
+| SoftDeletedMailboxes | - | - | Exchange Recipient<br>Global Reader |
+| DynamicDistributionGroups | - | - | Exchange Recipient<br>Global Reader |
+| DistributionGroupMembers | - | - | Exchange Recipient<br>Global Reader |
+| CalendarProcessing | - | - | Exchange Recipient<br>Global Reader |
+| CalendarPermissions | - | - | Exchange Recipient<br>Global Reader |
+| InboxRuleForwarding | - | - | Exchange Recipient<br>Global Reader |
+| SharingPolicies | - | - | Exchange Recipient<br>Global Reader |
+| AddressLists | - | - | Exchange Recipient<br>Global Reader |
+| MrmRetention | - | - | Exchange Recipient<br>Global Reader |
+| MrmRetentionPolicies | - | - | Exchange Recipient<br>Global Reader |
+| ApplicationAccessPolicies | - | - | Exchange Recipient<br>Global Reader |
+| ServicePrincipalRoleAssignments | - | - | Exchange Recipient<br>Global Reader |
+| HybridIndicators | - | - | Exchange Recipient<br>Global Reader |
+| HubSites | - | - | SharePoint Administrator |
+| SiteAdmins | - | - | SharePoint Administrator |
+| DeletedOneDrives | - | - | SharePoint Administrator |
+| SiteLists | Sites.Read.All | Sites.Read.All | - |
+| SiteUniquePermissions | - | - | - |
+| OneDriveKFM | - | - | - |
+| ThirdPartyEvidence | - | - | - |
+| TeamsConfig | - | - | Teams Administrator |
+| TeamsFederation | - | - | Teams Administrator |
+| TeamsGuestConfig | - | - | Teams Administrator |
+| TeamsPolicies | - | - | Teams Administrator |
+| TeamTabs | Team.ReadBasic.All<br>ChannelSettings.Read.All | - | - |
+| UsageM365Apps | Reports.Read.All | Reports.Read.All | Global Reader |
+| UsageOfficeActivations | Reports.Read.All | Reports.Read.All | Global Reader |
+| UsageGroupsActivity | Reports.Read.All | Reports.Read.All | Global Reader |
+| UsageYammer | Reports.Read.All | Reports.Read.All | Global Reader |
+| UsageTeamsDevices | Reports.Read.All | Reports.Read.All | Global Reader |
+| UsageCopilot | Reports.Read.All | Reports.Read.All | Global Reader |
+| UsageD90 | Reports.Read.All | Reports.Read.All | Global Reader |
+| UsageD180 | Reports.Read.All | Reports.Read.All | Global Reader |
 
 ## Application permissions (union for app-only runs)
 
+- `AdministrativeUnit.Read.All`
 - `AppCatalog.Read.All`
 - `Application.Read.All`
 - `AuditLog.Read.All`
 - `ChannelSettings.Read.All`
+- `DelegatedAdminRelationship.Read.All`
 - `Device.Read.All`
 - `DeviceManagementConfiguration.Read.All`
 - `DeviceManagementManagedDevices.Read.All`
@@ -214,8 +322,11 @@ Delegated permissions are consented interactively (`Connect-MgGraph -Scopes`). A
 - `Organization.Read.All`
 - `Policy.Read.All`
 - `Reports.Read.All`
+- `RoleAssignmentSchedule.Read.Directory`
+- `RoleEligibilitySchedule.Read.Directory`
 - `RoleManagement.Read.Directory`
 - `Sites.Read.All`
+- `Synchronization.Read.All`
 - `Tasks.Read.All`
 - `TeamMember.Read.All`
 - `TeamsAppInstallation.ReadForTeam.All`
@@ -224,6 +335,6 @@ Delegated permissions are consented interactively (`Connect-MgGraph -Scopes`). A
 - `User.Read.All`
 - `UserAuthenticationMethod.Read.All`
 
-## Admin roles (union): Compliance Administrator, eDiscovery Manager, Exchange Administrator, Global Administrator, Global Reader, Intune Administrator, Power BI Administrator, Power Platform Administrator, Reports Reader, SharePoint Administrator, Teams Administrator
+## Admin roles (union): Compliance Administrator, eDiscovery Manager, Exchange Administrator, Exchange Recipient, Global Administrator, Global Reader, Intune Administrator, Power BI Administrator, Power Platform Administrator, Reports Reader, SharePoint Administrator, Teams Administrator
 
 

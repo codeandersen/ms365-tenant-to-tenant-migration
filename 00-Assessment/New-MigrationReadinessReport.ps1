@@ -790,6 +790,28 @@ if ($target) {
         $preOd 'Url' $null
 }
 
+# Inactive / soft-deleted mailboxes - not moved by cross-tenant tools
+$inactiveMbxB = Import-AttCsv 'InactiveMailboxes.csv'
+Add-Blocker 'Inactive mailboxes' $inactiveMbxB.Count `
+    'Inactive mailboxes are not moved by cross-tenant mailbox migration. [Learn]($LearnMailbox)' `
+    'Decide per mailbox: restore + migrate, export to PST/archive, or leave.' `
+    $inactiveMbxB 'DisplayName' 'WhenSoftDeleted'
+
+# Third-party mail gateway evidence (Mimecast/Proofpoint etc.)
+$tpeB = Import-AttCsv 'ThirdPartyEvidence.csv'
+Add-Blocker 'Third-party mail gateway detected' $tpeB.Count `
+    'MX/SPF/connector records point at a third-party mail gateway - the mail flow cut-over needs connector + MX rework, not just the mailbox move.' `
+    'Plan gateway cut-over/rebuild in the target (see 02/09); decide whether the same vendor is kept.' `
+    $tpeB 'Vendor' 'Evidence'
+
+# Expiring app credentials - migration is a natural rotation point
+$appCredsB = Import-AttCsv 'AppCredentials.csv'
+$expiring60 = @($appCredsB | Where-Object { "$($_.DaysToExpiry)" -match '^-?\d+$' -and [int]$_.DaysToExpiry -le 60 })
+Add-Blocker 'App credentials expiring within 60 days' $expiring60.Count `
+    'App/SP secrets and certificates that expire during the migration window break apps if they are re-consented without renewal.' `
+    'Renew or rotate the credential when the app is re-created in the target.' `
+    $expiring60 'OwnerName' 'EndDateTime'
+
 # 8. Decisions / rebuild ------------------------------------------------------------
 
 $null = $r.AppendLine('## 8. Needs a decision or rebuild (not migrated by Microsoft tools)')
@@ -816,6 +838,20 @@ Add-Decision 'Mailbox Full Access permission entries' $mbxPerms.Count 'Re-apply 
 Add-Decision 'Send As entries' $sendAs.Count 'Re-apply after the mailboxes exist (phase 06/09).'
 Add-Decision 'Guests' $guests.Count 'Re-invite in the target tenant.'
 Add-Decision 'External SharePoint users' $extUsers.Count 'External users in SPO sharing - re-invite or re-share in the target tenant.'
+$dynDlsD = Import-AttCsv 'DynamicDistributionGroups.csv'
+Add-Decision 'Dynamic distribution groups' $dynDlsD.Count 'Membership is computed - recreate the RecipientFilter in the target (no member export needed).'
+$hubD = Import-AttCsv 'HubSites.csv'
+Add-Decision 'Hub site associations' $hubD.Count 'Re-register hub sites and re-associate sites in the target (HubSiteId on SharePointSites.csv).'
+$delOdD = Import-AttCsv 'DeletedOneDrives.csv'
+Add-Decision 'Deleted OneDrives (recoverable)' $delOdD.Count 'Soft-deleted personal sites within retention - restore before the move or accept the loss.'
+$samlD = Import-AttCsv 'SamlCertificates.csv'
+Add-Decision 'SAML enterprise apps' $samlD.Count 'SAML SSO certificates cannot move - re-upload/re-sign in the target (check SamlCertificates.csv expiry).'
+$pimD = Import-AttCsv 'PimEligibleAssignments.csv'
+Add-Decision 'PIM role assignments' $pimD.Count 'PIM does not migrate - recreate eligibility/activation schedules in the target.'
+$softDelD = Import-AttCsv 'SoftDeletedMailboxes.csv'
+Add-Decision 'Soft-deleted mailboxes' $softDelD.Count 'Restore or purge before cut-over - they are not migrated.'
+$gdapD = Import-AttCsv 'DelegatedAdminRelationships.csv'
+Add-Decision 'GDAP partner relationships' $gdapD.Count 'Re-establish GDAP relationships with partners in the target tenant.'
 
 # Service-plan indicators
 if ($servicePlans.Count -gt 0) {
@@ -997,7 +1033,13 @@ $collectorsCsv = Import-AttCsv 'Collectors.csv'
 $regByName = @{}
 $regPath = Join-Path $PSScriptRoot 'Collectors.psd1'
 if (Test-Path $regPath) {
-    try { foreach ($ce in @((Import-PowerShellDataFile -Path $regPath).Collectors)) { $regByName[$ce.Name] = $ce } } catch {}
+    try {
+        $regData = Import-PowerShellDataFile -Path $regPath
+        $regEntries = @($regData.Collectors)
+        $regP1Path = Join-Path $PSScriptRoot 'Collectors.Phase1.psd1'
+        if (Test-Path $regP1Path) { $regEntries += @((Import-PowerShellDataFile -Path $regP1Path).Collectors) }
+        foreach ($ce in $regEntries) { $regByName[$ce.Name] = $ce }
+    } catch {}
 }
 
 function Get-CsvCount { param([object[]]$Rows, [string]$CsvName)
@@ -1018,6 +1060,17 @@ $retentionPols = Import-AttCsv 'RetentionPolicies.csv'
 $intunePols    = Import-AttCsv 'IntunePolicies.csv'
 $manualCollectors = @($collectorsCsv | Where-Object { "$($_.Status)" -eq 'ManualDiscoveryRequired' }).Count
 $manualItems = ($notInventoried | Sort-Object -Unique).Count + $manualCollectors
+$inactiveMbx    = Import-AttCsv 'InactiveMailboxes.csv'
+$softDelMbx     = Import-AttCsv 'SoftDeletedMailboxes.csv'
+$dynDls         = Import-AttCsv 'DynamicDistributionGroups.csv'
+$hubSites       = Import-AttCsv 'HubSites.csv'
+$delOds         = Import-AttCsv 'DeletedOneDrives.csv'
+$tpe            = Import-AttCsv 'ThirdPartyEvidence.csv'
+$appCreds       = Import-AttCsv 'AppCredentials.csv'
+$samlCerts      = Import-AttCsv 'SamlCertificates.csv'
+$pimEligible    = Import-AttCsv 'PimEligibleAssignments.csv'
+$expiringCreds  = @($appCreds | Where-Object { "$($_.DaysToExpiry)" -match '^-?\d+$' -and [int]$_.DaysToExpiry -le 60 })
+$expiringSaml   = @($samlCerts | Where-Object { "$($_.DaysToExpiry)" -match '^-?\d+$' -and [int]$_.DaysToExpiry -le 60 })
 
 $ex = [System.Text.StringBuilder]::new()
 $null = $ex.AppendLine('## Executive summary')
@@ -1053,6 +1106,15 @@ $exRows = @(
     @{ M = 'Power Apps';            V = $ppApps.Count }
     @{ M = 'Power Automate flows';  V = $ppFlows.Count }
     @{ M = 'Power BI workspaces';   V = $pbiWs.Count }
+    @{ M = 'Inactive mailboxes (not moved by cross-tenant tools)'; V = $inactiveMbx.Count }
+    @{ M = 'Soft-deleted mailboxes'; V = $softDelMbx.Count }
+    @{ M = 'Dynamic distribution groups'; V = $dynDls.Count }
+    @{ M = 'Hub sites';             V = $hubSites.Count }
+    @{ M = 'Deleted OneDrives (recoverable)'; V = $delOds.Count }
+    @{ M = 'Third-party mail gateway evidence'; V = $tpe.Count }
+    @{ M = 'App credentials expiring <=60 days'; V = $expiringCreds.Count }
+    @{ M = 'SAML certificates expiring <=60 days'; V = $expiringSaml.Count }
+    @{ M = 'PIM eligible assignments'; V = $pimEligible.Count }
     @{ M = 'Blockers (section 7)';  V = $script:BlockerCount }
     @{ M = 'Items needing manual assessment'; V = $manualItems }
 )
@@ -1097,7 +1159,11 @@ if ($collectorsCsv.Count -eq 0) {
         $manual = 'No'
         if ($status -eq 'ManualDiscoveryRequired' -or ($reg -and "$($reg['Coverage'])" -eq 'ManualDiscoveryRequired')) { $manual = 'Yes' }
         $compl = "$($rec.Completeness)"; if (-not $compl) { $compl = 'Unknown' }
-        $null = $ex.AppendLine("| $ws | $wl | $identified | $inUse | $objCount | - | $status | $compl | $method | $manual | Not Assessed | Not Assessed |")
+        $gb = '-'
+        if ($wl -match 'Exchange Online|mailbox')   { $gb = [math]::Round($userGB + $sharedGB, 1) }
+        elseif ($wl -match 'SharePoint')            { $gb = [math]::Round($spGB, 1) }
+        elseif ($wl -match 'OneDrive')              { $gb = [math]::Round($odGB, 1) }
+        $null = $ex.AppendLine("| $ws | $wl | $identified | $inUse | $objCount | $gb | $status | $compl | $method | $manual | Not Assessed | Not Assessed |")
     }
     $null = $ex.AppendLine('')
 }

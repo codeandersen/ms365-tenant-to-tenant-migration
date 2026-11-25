@@ -1,0 +1,2 @@
+Name,Alias,PrimarySmtpAddress,RecipientFilter,IncludedRecipients,ManagedBy,MemberCount
+Sales Dynamic,salesdyn,salesdyn@contoso.com,(Department -eq 'Sales'),AllRecipients,admin@contoso.com,42

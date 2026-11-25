@@ -1,0 +1,2 @@
+Id,DisplayName,CustomerTenantId,PartnerTenantId,Status,Duration,AccessDetails
+gdap-1,Contoso Partner GDAP,aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee,00000000-0000-0000-0000-000000000000,Active,P2Y,Global Reader

@@ -1,0 +1,2 @@
+AppId,DisplayName,Usage,KeyId,Thumbprint,StartDateTime,EndDateTime,DaysToExpiry
+aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee,Contoso SAML App,Sign,kid-2,aabb,2024-01-01,2025-12-10,15

@@ -1,0 +1,2 @@
+Id,Principal,PrincipalDisplayName,PrincipalId,Role,RoleDefinitionId,DirectoryScopeId,MemberType,Status,StartDateTime,EndDateTime
+pim-1,admin@contoso.com,Contoso Admin,aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee,Global Reader,aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee,/,Direct,Provisioned,2025-01-01,

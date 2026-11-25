@@ -19,7 +19,11 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $data = Import-PowerShellDataFile -Path $RegistryPath
+# Collectors.Phase1.psd1: separate file - Import-PowerShellDataFile caps a data
+# file at 132 objects
+$phase1Path = Join-Path (Split-Path $RegistryPath -Parent) 'Collectors.Phase1.psd1'
 $collectors = @($data.Collectors)
+if (Test-Path $phase1Path) { $collectors += @((Import-PowerShellDataFile -Path $phase1Path).Collectors) }
 
 function Get-E {
     # Registry entries are hashtables; Endpoint/Cmdlet are mutually exclusive keys.

@@ -231,4 +231,23 @@ Describe 'New-MigrationReadinessReport' {
         $m | Should -Match '## Workload summary'
         $m | Should -Match 'Not Assessed'
     }
+
+    It 'renders Phase 1 executive summary rows' {
+        $script:Md | Should -Match 'Inactive mailboxes \(not moved by cross-tenant tools\) \| 1'
+        $script:Md | Should -Match 'Dynamic distribution groups \| 1'
+        $script:Md | Should -Match 'Hub sites \| 1'
+        $script:Md | Should -Match 'Deleted OneDrives \(recoverable\) \| 1'
+        $script:Md | Should -Match 'Third-party mail gateway evidence \| 1'
+        $script:Md | Should -Match 'App credentials expiring <=60 days \| 1'
+        $script:Md | Should -Match 'SAML certificates expiring <=60 days \| 1'
+        $script:Md | Should -Match 'PIM eligible assignments \| 1'
+    }
+
+    It 'flags Phase 1 blockers and decisions' {
+        $script:Md | Should -Match 'Inactive mailboxes - 1'
+        $script:Md | Should -Match 'Third-party mail gateway detected - 1'
+        $script:Md | Should -Match 'App credentials expiring within 60 days - 1'
+        $script:Md | Should -Match 'Mimecast'
+        $script:Md | Should -Match 'Dynamic distribution groups'
+    }
 }
